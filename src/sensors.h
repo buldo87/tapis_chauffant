@@ -1,43 +1,37 @@
 #ifndef SENSORS_H
 #define SENSORS_H
 
-#include <Arduino.h>
+#include <Adafruit_SHT31.h>
+#include <Wire.h>
+#include "config.h"
 
-// ==== FONCTIONS PUBLIQUES ====
+// Classe de gestion du capteur SHT31
+class SensorManager {
+private:
+    Adafruit_SHT31 sht31;
+    bool sensor_initialized;
+    unsigned long last_read;
+    const unsigned long READ_INTERVAL = 5000; // Lecture toutes les 5 secondes
+    
+    // Historique pour moyennes
+    static const int HISTORY_SIZE = 288; // 24h avec lecture toutes les 5min
+    float temp_history[HISTORY_SIZE];
+    float humidity_history[HISTORY_SIZE];
+    int history_index;
+    bool history_full;
+    
+public:
+    SensorManager();
+    bool begin();
+    bool readSensors();
+    float getTemperature();
+    float getHumidity();
+    float getTemperatureAverage24h();
+    float getHumidityAverage24h();
+    bool isInitialized();
+    void addToHistory();
+};
 
-/**
- * @brief Initialise les capteurs (SHT31)
- */
-void initSensors();
+extern SensorManager sensors;
 
-/**
- * @brief Lit les valeurs des capteurs
- * @return true si lecture réussie, false sinon
- */
-bool readSensors();
-
-/**
- * @brief Récupère la dernière température lue
- * @return Température en °C
- */
-float getSensorTemperature();
-
-/**
- * @brief Récupère la dernière humidité lue
- * @return Humidité en %
- */
-float getSensorHumidity();
-
-/**
- * @brief Vérifie si les capteurs sont fonctionnels
- * @return true si capteurs OK, false sinon
- */
-bool areSensorsReady();
-
-/**
- * @brief Récupère le timestamp de la dernière lecture
- * @return Timestamp en millisecondes
- */
-uint32_t getLastReadingTime();
-
-#endif // SENSORS_H
+#endif
