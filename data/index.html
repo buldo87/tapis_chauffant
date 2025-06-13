@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<!--  Genspark -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/css/style.css">
+    <title>Contrôleur Vivarium Fourmis</title>
+    <link rel="icon" type="image/x-icon" href="/images/favicon.ico">
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+
+    </style>
+</head>
+<body>
+    <div class="container mx-auto px-4 py-6 max-w-7xl">
+        <!-- Header -->
+        <div class="text-center mb-8 fade-in">
+            <h1 class="text-4xl font-bold mb-2">
+                <i class="fas fa-bug text-orange-500 mr-3"></i>
+                Contrôleur Vivarium
+            </h1>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <div class="flex justify-center mb-8">
+            <div class="bg-gray-800 rounded-lg p-1 inline-flex">
+                <button id="tabDashboard" class="tab-button px-6 py-3 rounded-md tab-active transition-all duration-300">
+                    <i class="fas fa-chart-line mr-2"></i>Surveillance
+                </button>
+                <button id="tabConfig" class="tab-button px-6 py-3 rounded-md tab-inactive transition-all duration-300">
+                    <i class="fas fa-cog mr-2"></i>Configuration
+                </button>
+            </div>
+        </div>
+
+        <!-- Dashboard Tab -->
+        <div id="dashboardContent" class="tab-content">
+            <!-- Status Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+                <div class="metric-card fade-in">
+                    <div class="metric-label">Température</div>
+                    <div id="temperature" class="metric-value">--°C</div>
+                    <div class="text-sm text-gray-400">
+                        Min: <span id="minTemperature">--°C</span> | Max: <span id="maxTemperature">--°C</span>
+                    </div>
+                    <div class="text-sm text-gray-400">
+                       Moyenne 24h: <span id="movingAverageTemp">--°C</span>
+                    </div>
+                </div>
+                
+                <div class="metric-card fade-in">
+                    <div class="metric-label">Humidité</div>
+                    <div id="humidity" class="metric-value">--%</div>
+                    <div class="text-sm text-gray-400">
+                        Min: <span id="minHumidite">--%</span> | Max: <span id="maxHumidite">--%</span>
+                    </div>
+                    <div class="text-sm text-gray-400">
+                        Moyenne 24h: <span id="movingAverageHum">--%</span>
+                    </div>
+                </div>
+                
+                <div class="metric-card fade-in">
+                    <div class="metric-label">État Chauffage</div>
+                    <div id="heaterState" class="metric-value">--</div>
+                    <div class="text-sm text-gray-400">
+                        Mode: <span id="currentMode">--</span>
+                    </div>
+                     <div class="text-sm text-gray-400">
+                        Consigne: <span id="consigneTemp">--°C</span>
+                    </div>
+                </div>
+                
+                <div class="metric-card fade-in">
+                    <div class="metric-label">Système</div>
+                    <div class="metric-value text-lg">
+                        <span class="status-indicator status-online"></span>WiFi
+                    </div>
+                    <div class="text-sm text-gray-400" id="currentTime">--:--</div>
+                    <span>Heure actuelle: <strong id="currentHour">12h</strong></span>
+                </div>
+            </div>
+
+            <!-- Charts Section -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+                <div class="card">
+                    <h3 class="text-xl font-semibold mb-4 flex items-center">
+                        <i class="fas fa-thermometer-half text-orange-500 mr-2"></i>
+                        Évolution Température
+                    </h3>
+                    <div class="chart-container">
+                        <canvas id="tempChart"></canvas>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <h3 class="text-xl font-semibold mb-4 flex items-center">
+                        <i class="fas fa-tint text-blue-400 mr-2"></i>
+                        Évolution Humidité
+                    </h3>
+                    <div class="chart-container">
+                        <canvas id="humidityChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Camera Section -->
+            <div class="card mb-8" id="cameraContainer" style="display: none;">
+                <h3 class="text-xl font-semibold mb-4 flex items-center">
+                    <i class="fas fa-video text-purple-500 mr-2"></i>
+                    Stream Caméra
+                </h3>
+                <div class="flex justify-center">
+                    <img id="camStream" class="rounded-lg border border-gray-600 max-w-full h-auto" 
+                         src="/capture" alt="Stream caméra" style="max-height: 400px;">
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Configuration Tab -->
+        <div id="configContent" class="tab-content" style="display: none;">
+            
+            <div class="grid grid-cols-1 lg:grid-cols-1 gap-8">
+
+                <!-- Courbe de chauffage -->
+                <div class="card">
+                    <h3 class="text-xl font-semibold mb-6 flex items-center">
+                        <i class="fas text-blue-500 mr-2"></i>
+                        📊 Courbe de chauffage
+                    </h3>
+                    
+                    <div class="chart-container">
+                        <canvas id="temperatureChart"></canvas>
+                    </div>
+
+                    <div class="controls">
+                        <div class="control-group">
+                            <h3>🎛️ Contrôles Rapides</h3>
+                            <div class="px-6 py-3 rounded-md duration-300">
+                                <button class="btn-primary" onclick="sendToDevice()">📡 Envoyer au Tapis</button>
+                                <button class="btn-secondary" onclick="smoothCurve()">🌊 Lisser la Courbe</button>
+                                <button class="btn-success" onclick="saveProfile()">💾 Sauvegarder</button>
+                                <button class="btn-warning" onclick="loadProfile()">📂 Charger</button>
+                            </div>
+                            
+                            <div class="preset-section">
+                                <h4 style="color: #b0b0b0; margin-bottom: 10px;">Profils Prédéfinis :</h4>
+                                <div class="px-6 py-3 rounded-md duration-300">
+                                    <button class="preset-btn" onclick="applyPreset('mer')">🦎 Bord de mer (24-29°C)</button>
+                                    <button class="preset-btn" onclick="applyPreset('foret')">🐸 Forêt (23-28°C)</button>
+                                    <button class="preset-btn" onclick="applyPreset('tropical')">🌴 Tropical (28-32°C)</button>
+                                    <button class="preset-btn" onclick="applyPreset('desert')">🏜️ Désert (23-32°C)</button>
+                                    <button class="preset-btn" onclick="applyPreset('constant')">⚖️ Constant (25°C)</button>
+                                    <button id="copieSettings" class="preset-btn" style="display: none;" onclick="applyPreset('copie')">🌍 Données Météo Locales</button>
+                                    <button class="preset-btn" onclick="resetToDefault()">🔄 Réinitialiser</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- Weather & Location -->
+                <div class="card">
+                    <h3 class="text-xl font-semibold mb-6 flex items-center">
+                        <i class="fas fa-globe text-blue-500 mr-2"></i>
+                        Copie des températures d'un lien
+                    </h3>
+                    
+                    <div class="mb-6">
+                        <label class="flex items-center justify-between">
+                            <span>Mode Copie</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="weatherMode">
+                                <span class="slider"></span>
+                            </label>
+                        </label>
+                    </div>
+
+                    <div id="weatherSettings" style="display: none;">
+                        <h3>🌍 Configuration du lieu</h3>
+                        
+                        <!-- Coordonnées existantes -->
+                        <div class="input-group">
+                            <label class="block text-sm font-medium mb-2">Latitude</label>
+                            <input type="number" id="latInput" class="input-field" step="0.0001" placeholder="48.8566">
+                            <label class="block text-sm font-medium mb-2">Longitude</label>
+                            <input type="number" id="lonInput" class="input-field" step="0.0001" placeholder="2.3522">
+                        </div>
+                        
+                        <!-- Boutons de géolocalisation -->
+                    <div class="map-controls">
+                        <button type="button" onclick="getCurrentLocation()" class="btn-secondary">
+                            📍 Ma Position
+                        </button>
+                        <button type="button" onclick="searchLocation()" class="btn-secondary">
+                            🔍 Rechercher
+                        </button>
+                        <button type="button" onclick="toggleMap()" class="btn-secondary" id="mapToggleBtn">
+                            🗺️ Ouvrir la Carte
+                        </button>
+                    </div>
+                        
+                        <!-- Conteneur de la carte -->
+                        <div id="mapContainer" style="display: none; margin-top: 15px;">
+                            <div id="map" style="height: 400px; width: 100%; border-radius: 8px; border: 2px solid #311616;"></div>
+                            <p style="color: #ccc; font-size: 12px; margin-top: 5px;">
+                                🖱️ Cliquez sur la carte pour sélectionner une position
+                            </p>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <!-- Heating Control -->
+                <div class="card">
+                    <h3 class="text-xl font-semibold mb-6 flex items-center">
+                        <i class="fas fa-fire text-red-500 mr-2"></i>
+                        Contrôle Chauffage
+                    </h3>
+                    
+                    <div class="mb-6">
+                        <label class="flex items-center justify-between">
+                            <span>Mode PWM (PID)</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="usePWM">
+                                <span class="slider"></span>
+                            </label>
+                        </label>
+                    </div>
+                    
+                    <div id="pwmSettings" style="display: none;">
+                        <h4 class="text-lg font-medium mb-4">Paramètres PID</h4>
+                        <div class="grid grid-cols-3 gap-4 mb-4">
+                            <div>
+                                <label class="block text-sm font-medium mb-2">Kp</label>
+                                <input type="number" id="KpSet" class="input-field" step="0.1" value="2.0">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium mb-2">Ki</label>
+                                <input type="number" id="KiSet" class="input-field" step="0.1" value="0.5">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium mb-2">Kd</label>
+                                <input type="number" id="KdSet" class="input-field" step="0.1" value="1.0">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div id="hysteresisSettings">
+                        <div>
+                            <label class="block text-sm font-medium mb-2">Hystérésis (°C)</label>
+                            <input type="number" id="hysteresisSet" class="input-field" min="0.1" max="2" step="0.1" value="0.2">
+                        </div>
+                    </div>
+                     <br> </br>
+                    <div class="mb-6">
+                        <label class="flex items-center justify-between">
+                            <span>Limiter la température</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="useLimitTemp">
+                                <span class="slider"></span>
+                            </label>
+                        </label>
+                    </div>
+                    
+                    <div id="limitTempSettings" style="display: none;">
+                        <div class="grid grid-cols-2 gap-4 mb-4">
+                            <div>
+                                <label class="block text-sm font-medium mb-2">Minimum</label>
+                                <input type="number" id="minTempSet" class="input-field" step="0.1" value="0">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium mb-2">Maximum</label>
+                                <input type="number" id="maxTempSet" class="input-field" step="0.1" value="40">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Camera Configuration -->
+                <div class="card">
+                    <h3 class="text-xl font-semibold mb-6 flex items-center">
+                        <i class="fas fa-camera text-purple-500 mr-2"></i>
+                        Configuration Caméra
+                    </h3>
+                    
+                    <div class="mb-6">
+                        <label class="flex items-center justify-between">
+                            <span>Activer Caméra</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="showCamera">
+                                <span class="slider"></span>
+                            </label>
+                        </label>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium mb-2">Qualité Stream</label>
+                        <select id="cameraQuality" class="input-field">
+                            <option value="qvga">QVGA (320x240)</option>
+                            <option value="svga">SVGA (800x600)</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <h4 class="text-lg font-medium mb-4">Éclairage LED</h4>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium mb-2">Intensité (%)</label>
+                                <input type="range" id="ledIntensity" class="w-full" min="0" max="100" value="50">
+                                <span id="ledIntensityValue" class="text-sm text-gray-400">50%</span>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium mb-2">Couleur</label>
+                                <select id="ledColor" class="input-field">
+                                    <option value="white">Blanc</option>
+                                    <option value="red">Rouge</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Save Configuration -->
+                <div class="card">
+                    <h3 class="text-xl font-semibold mb-6 flex items-center">
+                        <i class="fas fa-save text-green-500 mr-2"></i>
+                        Sauvegarde
+                    </h3>
+                    <p class="text-gray-400 mb-6">
+                        Sauvegarder tous les paramètres dans la mémoire de l'ESP32. 
+                        Les paramètres seront conservés même en cas de coupure d'électricité.
+                    </p>
+                    <button id="applyBtn" class="btn-primary w-full">
+                        <i class="fas fa-download mr-2"></i>
+                        Sauvegarder Configuration
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Scripts -->
+    <script src="/js/api.js"></script>
+    <script src="/js/surveillance.js"></script>
+    <script src="/js/configuration.js"></script>
+    <script src="/js/main.js"></script>
+    <script src="/js/map.js"></script>
+</body>
+</html>
