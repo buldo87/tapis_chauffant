@@ -1,9 +1,5 @@
 // js/surveillance.js
-
-/**
- * Module de surveillance - Gestion des graphiques et affichage temps réel
- **/
-        
+  
 // Chart.js configuration with moving averages
 const chartOptions = {
 	responsive: true,
@@ -108,4 +104,3 @@ function initCharts() {
 		options: chartOptions
 	});
 }
-

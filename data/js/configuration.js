@@ -1,9 +1,4 @@
-// js/configuration.js
-
-/**
- * Module de configuration - Gestion des paramètres de l'interface
- */
-
+ //configuration.js
  // coube ajustable
 let chart;
 let temperatureData = Array(24).fill(0).map((_, i) => 22 + Math.sin(i / 24 * Math.PI * 2) * 6); // Courbe sinusoïdale par défaut
@@ -11,7 +6,8 @@ let extendedTemperatureData = [temperatureData[temperatureData.length - 1], ...t
 let isDragging = false;
 let currentHour = new Date().getHours();
 let currentMin = new Date().getMinutes();
-// Camera functions
+let refreshing = false;
+
 function updateCameraVisibility() {
 	const show = document.getElementById("showCamera").checked;
 	const container = document.getElementById("cameraContainer");
@@ -23,85 +19,253 @@ function updateCameraVisibility() {
 	fetch("/setCamera?enabled=" + (show ? 1 : 0))
 		.catch(err => console.error("Erreur setCamera:", err));
 
-	if (show) {
-		refreshInterval = setInterval(() => {
-			img.src = "/capture?ts=" + new Date().getTime();
-		}, 1000);
-	} else {
-		clearInterval(refreshInterval);
+	if (show && !refreshing) {
+		startImageLoop(img);
 	}
+}
+
+function startImageLoop(img, interval = 1000) {
+	refreshing = true;
+
+	const loadNextImage = () => {
+		if (!cameraEnabled) {
+			refreshing = false;
+			return;
+		}
+
+		const ts = Date.now();
+		const newImg = new Image();
+
+		newImg.onload = () => {
+			// Remplacer l’image visible seulement après chargement
+			img.src = newImg.src;
+			setTimeout(loadNextImage, interval);
+		};
+
+		newImg.onerror = () => {
+			console.warn("Erreur chargement image");
+			setTimeout(loadNextImage, interval * 2);
+		};
+
+		newImg.src = `/capture?ts=${ts}`;
+	};
+
+	loadNextImage();
+}
+
+function setResolution() {
+    var quality = document.getElementById("cameraResolution").value;
+    fetch('/set-resolution-cam', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'quality=' + encodeURIComponent(quality)
+    })
+    .then(response => response.text())
+    .then(data => {
+        alert("Résolution mise à jour : " + data);
+    })
+    .catch(error => {
+        console.error('Erreur:', error);
+    });
+}
+// Fonction pour convertir RGB en hexadécimal
+function rgbToHex(r, g, b) {
+	return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
+function updateVisibility() {
+    // PWM settings
+    const pwmChecked = document.getElementById("usePWM").checked;
+    const pwmDiv = document.getElementById("pwmSettings");
+    const hysteresisDiv = document.getElementById("hysteresisSettings");
+
+    if (pwmDiv) pwmDiv.style.display = pwmChecked ? "block" : "none";
+    if (hysteresisDiv) hysteresisDiv.style.display = pwmChecked ? "none" : "block";
+
+    // Weather settings
+    const weatherChecked = document.getElementById("weatherMode").checked;
+    const weatherDiv = document.getElementById("weatherSettings");
+    const copieButton = document.getElementById("copieSettings");
+
+    if (weatherDiv) weatherDiv.style.display = weatherChecked ? "block" : "none";
+    if (copieButton) copieButton.style.display = weatherChecked ? "inline-block" : "none";
+
+    // Temperature limit settings
+    const limitTempChecked = document.getElementById("useLimitTemp").checked;
+    const limitTempDiv = document.getElementById("limitTempSettings");
+
+    if (limitTempDiv) limitTempDiv.style.display = limitTempChecked ? "block" : "none";
+}
+
+// Dans configuration.js - Modifier loadCurrentConfigToUI()
+async function loadCurrentConfigToUI() {
+    try {
+        const res = await fetch('/getCurrentConfig');
+        if (!res.ok) throw new Error("Erreur lors de la lecture de la configuration");
+
+        const config = await res.json();
+
+        // Remplissage des champs standards
+        document.getElementById("hysteresisSet").value = config.hysteresis;
+        document.getElementById("KpSet").value = config.Kp;
+        document.getElementById("KiSet").value = config.Ki;
+        document.getElementById("KdSet").value = config.Kd;
+        document.getElementById("usePWM").checked = !!config.usePWM;
+        document.getElementById("latInput").value = config.latitude;
+        document.getElementById("lonInput").value = config.longitude;
+        document.getElementById("weatherMode").checked = !!config.weatherModeEnabled;
+        document.getElementById("showCamera").checked = !!config.cameraEnabled;
+        document.getElementById("cameraResolution").value = config.cameraResolution;
+        document.getElementById("useLimitTemp").checked = !!config.useLimitTemp;
+        document.getElementById("maxTempSet").value = config.globalMaxTempSet;
+        document.getElementById("minTempSet").value = config.globalMinTempSet;
+
+        // 🔧 Configuration LED - SANS appeler saveConfigurationled()
+        const ledToggle = document.getElementById("led-toggle");
+        const brightnessSlider = document.getElementById("brightness-slider");
+        const brightnessValue = document.getElementById("brightness-value");
+
+        if (ledToggle && brightnessSlider && brightnessValue) {
+            ledToggle.checked = !!config.ledState;
+            brightnessSlider.value = config.ledBrightness;
+            brightnessValue.textContent = config.ledBrightness;
+
+            // Attendre que Spectrum soit prêt avant de configurer la couleur
+            if (typeof config.ledRed === "number" && 
+                typeof config.ledGreen === "number" && 
+                typeof config.ledBlue === "number") {
+                
+                const hexColor = rgbToHex(config.ledRed, config.ledGreen, config.ledBlue);
+                
+                // Attendre l'initialisation de Spectrum
+                setTimeout(() => {
+                    try {
+                        const colorPicker = $("#color-picker");
+                        if (colorPicker.length && typeof colorPicker.spectrum === 'function') {
+                            colorPicker.spectrum("set", hexColor);
+                            updateLedDot();
+                        }
+                    } catch (error) {
+                        console.warn("⚠️ Impossible de configurer la couleur LED:", error.message);
+                    }
+                }, 1000); // Délai pour laisser Spectrum s'initialiser
+            }
+        } else {
+            console.warn("⚠️ Élément LED manquant dans le DOM");
+        }
+
+        // 📈 Charger la courbe de température
+        if (Array.isArray(config.tempCurve)) {
+            temperatureData = config.tempCurve;
+            updateChartAndGrid();
+        }
+
+        // Mettre à jour la visibilité des sections
+        updateVisibility();
+
+        // Mettre à jour la taille de l'image de la caméra
+        if (typeof setStreamDimensions === 'function') {
+            setStreamDimensions(config.cameraResolution);
+        }
+
+        console.log("✅ Configuration rechargée depuis l'ESP");
+    } catch (e) {
+        console.error("❌ Erreur de lecture config :", e);
+    }
 }
 
 // Save all settings
 function applyAllSettings() {
-    // Liste des éléments requis avec vérification d'existence
-    const getElement = (id) => {
-        const el = document.getElementById(id);
-        if (!el) console.error(`Élément ${id} non trouvé`);
-        return el;
-    };
+    console.log("🔄 Début de la sauvegarde de la configuration...");
 
-    const elements = {
-        hysteresisSet: document.getElementById("hysteresisSet"),
-        KpSet: document.getElementById("KpSet"),
-        KiSet: document.getElementById("KiSet"),
-        KdSet: document.getElementById("KdSet"),
-        usePWM: document.getElementById("usePWM"),
-        latInput: document.getElementById("latInput"),
-        lonInput: document.getElementById("lonInput"),
-        weatherMode: document.getElementById("weatherMode"),
-        showCamera: document.getElementById("showCamera"),
-        useLimitTemp: document.getElementById("useLimitTemp"),
-        MaxTempSet: document.getElementById("MaxTempSet"),
-        MinTempSet: document.getElementById("MinTempSet")
-    };
-	    // Vérifier les éléments manquants
-    for (const [key, element] of Object.entries(elements)) {
-        if (!element) {
-            console.error(`Élément ${key} non trouvé dans le DOM`);
+    const get = (id) => document.getElementById(id);
+
+    const fields = [
+        "hysteresisSet", "KpSet", "KiSet", "KdSet",
+        "usePWM", "latInput", "lonInput",
+        "weatherMode", "showCamera", "cameraResolution", "useLimitTemp",
+        "maxTempSet", "minTempSet",
+        "led-toggle", "brightness-slider", "color-picker"
+    ];
+
+    // 🔍 Vérification des éléments requis
+    for (const id of fields) {
+        if (!get(id)) {
+            alert(`❌ Élément ${id} introuvable`);
+            console.error(`❌ Élément ${id} introuvable`);
             return;
         }
     }
 
-        // Récupérer les valeurs seulement si les éléments existent
-    const hysteresis = elements.hysteresisSet.value;
-    const Kp = elements.KpSet.value;
-    const Ki = elements.KiSet.value;
-    const Kd = elements.KdSet.value;
-    const usePWM = elements.usePWM.checked ? 1 : 0;
-    const lat = elements.latInput.value;
-    const lon = elements.lonInput.value;
-    const weatherEnabled = elements.weatherMode.checked ? 1 : 0;
-    const showCamera = elements.showCamera.checked ? 1 : 0;
-    const useLimitTemp = elements.useLimitTemp.checked ? 1 : 0;
-    globalMaxTempSet = elements.MaxTempSet.value;
-    globalMinTempSet = elements.MinTempSet.value;
+    // ✅ Conversion couleur LED en RGB
+    let red = 255, green = 255, blue = 255;
+    let color = "#ffffff";
+    try {
+        color = $("#color-picker").spectrum("get").toHexString();
+        red = parseInt(color.substr(1, 2), 16);
+        green = parseInt(color.substr(3, 2), 16);
+        blue = parseInt(color.substr(5, 2), 16);
+    } catch (e) {
+        console.warn("⚠️ Erreur de récupération couleur, valeurs par défaut utilisées.");
+    }
 
-	Promise.all([
-        fetch("/setGlobalMaxTemp?globalMaxTempSet="+globalMaxTempSet),
-        fetch("/setGlobalMinTempSet?globalMinTempSet="+globalMinTempSet),
-		fetch("/setHysteresis?hysteresis="+hysteresis),
-		fetch("/setPID?Kp="+Kp+"&Ki="+Ki+"&Kd="+Kd),
-		fetch("/setPWMMode?usePWM="+usePWM),
-        fetch("/setLimitTemp?useLimitTemp="+useLimitTemp),
-		fetch("/setWeather?lat="+lat+"&lon="+lon+"&enabled="+weatherEnabled),
-		fetch("/setCamera?enabled="+showCamera),
-        fetch("/setWeatherEnabled="+weatherEnabled)
-	])
-	.then(() => {
-		// Success animation
-		const btn = document.getElementById("applyBtn");
-		btn.innerHTML = '<i class="fas fa-check mr-2"></i>Sauvegardé!';
-		btn.style.background = '#4ade80';
-		setTimeout(() => {
-			btn.innerHTML = '<i class="fas fa-download mr-2"></i>Sauvegarder Configuration';
-			btn.style.background = '';
-		}, 2000);
-	})
-	.catch(error => {
-		console.error("Erreur:", error);
-		alert("Erreur lors de la sauvegarde des paramètres: " + error.message);
-	});
+    // 📦 Création de l'objet de configuration global
+    const payload = {
+        hysteresis: parseFloat(get("hysteresisSet").value),
+        Kp: parseFloat(get("KpSet").value),
+        Ki: parseFloat(get("KiSet").value),
+        Kd: parseFloat(get("KdSet").value),
+        usePWM: get("usePWM").checked ? 1 : 0,
+        globalMinTempSet: parseFloat(get("minTempSet").value),
+        globalMaxTempSet: parseFloat(get("maxTempSet").value),
+        latitude: parseFloat(get("latInput").value),
+        longitude: parseFloat(get("lonInput").value),
+        weatherModeEnabled: get("weatherMode").checked ? 1 : 0,
+        cameraEnabled: get("showCamera").checked ? 1 : 0,
+		cameraResolution: get("cameraResolution").value,
+        useLimitTemp: get("useLimitTemp").checked ? 1 : 0,
+        tempCurve: [...temperatureData],  
+        ledState: get("led-toggle").checked,
+        ledBrightness: parseInt(get("brightness-slider").value),
+        ledRed: red,
+        ledGreen: green,
+        ledBlue: blue
+    };
+
+    console.log("📊 Configuration complète à envoyer :");
+    console.log(payload);
+
+    // Envoi vers serveur
+    fetch("/applyAllSettings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+    })
+    .then(res => {
+        if (!res.ok) throw new Error("Échec serveur : " + res.status);
+        return res.text();
+    })
+    .then(txt => {
+        console.log("✅ Réponse du serveur :", txt);
+        const btn = get("applyBtn");
+        btn.innerHTML = '<i class="fas fa-check mr-2"></i>Sauvegardé !';
+        btn.style.background = '#4ade80';
+        setTimeout(() => {
+            btn.innerHTML = '<i class="fas fa-download mr-2"></i>Sauvegarder Configuration';
+            btn.style.background = '';
+        }, 2000);
+
+        setTimeout(() => {
+            if (typeof loadCurrentConfigToUI === "function") {
+                loadCurrentConfigToUI();
+            }
+        }, 1000);
+    })
+    .catch(err => {
+        console.error("❌ Erreur lors de l'application :", err);
+        alert("Erreur : " + err.message);
+    });
 }
 
 // Load historical data
@@ -130,6 +294,7 @@ function loadHistory() {
 		})
 		.catch(err => console.error("Erreur chargement historique:", err));
 }
+
 // Propagation des valeurs extrèmes de la courbe
 function updateTemperatureFromExtendedIndex(index, temp) {
     // Propagation depuis extendedTemperatureData vers temperatureData
@@ -148,128 +313,128 @@ function updateTemperatureFromExtendedIndex(index, temp) {
 }
 
 // Configuration du graphique (à placer avant la fonction initChart)
-const chartConfig = {
-    type: 'line',
-    data: {
-        //labels: Array.from({length: 24}, (_, i) => i + 'h'),
-        labels: ['23h', '0h', '1h', '2h', '3h', '4h', '5h', '6h', '7h', '8h', '9h', '10h', '11h',
-                 '12h', '13h', '14h', '15h', '16h', '17h', '18h', '19h', '20h', '21h', '22h', '23h', '0h'],
-     
-        datasets: [{
-            label: 'Température (°C)',
-            //data: temperatureData,
-            data: extendedTemperatureData,
-            borderColor: '#ff6b6b',
-            backgroundColor: 'rgba(255, 107, 107, 0.1)',
-            borderWidth: 3,
-            fill: true,
-            tension: 0.3,
-            pointBackgroundColor: '#ff6b6b',
-            pointBorderColor: '#ffffff',
-            pointBorderWidth: 2,
-            pointRadius: 8,
-            pointHoverRadius: 12
-        }]
-    },
-    options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: {
-            intersect: false,
-            mode: 'index'
+function initChart() {
+    const canvas = document.getElementById('temperatureChart');
+    if (!canvas) {
+        console.warn("⚠️ Élément canvas introuvable, tentative retardée");
+        setTimeout(initChart, 500);
+        return;
+    }
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+        console.warn("⚠️ Contexte canvas introuvable");
+        return;
+    }
+
+    // 🔁 Créer les données étendues
+    extendedTemperatureData = [
+        temperatureData[temperatureData.length - 1], // pour lisser la courbe
+        ...temperatureData,
+        temperatureData[0]
+    ];
+
+    const labels = ['23h', '0h', '1h', '2h', '3h', '4h', '5h', '6h', '7h', '8h', '9h', '10h', '11h',
+                    '12h', '13h', '14h', '15h', '16h', '17h', '18h', '19h', '20h', '21h', '22h', '23h', '0h'];
+
+    const chartConfig = {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Température (°C)',
+                data: extendedTemperatureData,
+                borderColor: '#ff6b6b',
+                backgroundColor: 'rgba(255, 107, 107, 0.1)',
+                borderWidth: 3,
+                fill: true,
+                tension: 0.3,
+                pointBackgroundColor: '#ff6b6b',
+                pointBorderColor: '#ffffff',
+                pointBorderWidth: 2,
+                pointRadius: 8,
+                pointHoverRadius: 12
+            }]
         },
-        plugins: {
-            legend: {
-                labels: {
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                intersect: false,
+                mode: 'index'
+            },
+            plugins: {
+                legend: {
+                    labels: {
+                        color: '#ffffff',
+                        font: { size: 14 }
+                    }
+                },
+                title: {
+                    display: true,
+                    text: 'Courbe de température sur 24h - Cliquez et glissez pour ajuster',
                     color: '#ffffff',
-                    font: { size: 14 }
+                    font: { size: 18 }
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return `${context.parsed.y.toFixed(1)}°C`;
+                        }
+                    }
                 }
             },
-            title: {
-                display: true,
-                text: 'Courbe de température sur 24h - Cliquez et glissez pour ajuster',
-                color: '#ffffff',
-                font: { size: 18 }
+            scales: {
+                x: {
+                    grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                    ticks: { color: '#ffffff' }
+                },
+                y: {
+                    grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                    ticks: { color: '#ffffff' },
+                    min: function(context) {
+                        return Math.min(...context.chart.data.datasets[0].data) - 1;
+                    },
+                    max: function(context) {
+                        return Math.max(...context.chart.data.datasets[0].data) + 1;
+                    }
+                }
             },
-            tooltip: {
-                callbacks: {
-                    label: function(context) {
-                        return `${context.parsed.y.toFixed(1)}°C`;
+            onHover: (event, activeElements) => {
+                event.native.target.style.cursor = activeElements.length > 0 ? 'pointer' : 'crosshair';
+            },
+            onClick: (event, activeElements) => {
+                if (activeElements.length > 0) {
+                    const index = activeElements[0].index;
+                    const canvasPosition = Chart.helpers.getRelativePosition(event, chart);
+                    const dataY = chart.scales.y.getValueForPixel(canvasPosition.y);
+                    if (index >= 0 && index <= 25) {
+                        const newTemp = Math.max(globalMinTempSet, Math.min(globalMaxTempSet, dataY));
+                        updateTemperatureFromExtendedIndex(index, newTemp);
                     }
                 }
             }
-        },
-        scales: {
-            x: {
-                grid: { color: 'rgba(255, 255, 255, 0.1)' },
-                ticks: { color: '#ffffff' }
-            },
-            y: {
-                grid: { color: 'rgba(255, 255, 255, 0.1)' },
-                ticks: { color: '#ffffff' },
-                min: function(context) {
-                // Valeur minimale de l'axe Y basée sur les données, moins 1
-                return Math.min(...context.chart.data.datasets[0].data) - 1;
-            },
-                max: function(context) {
-                    // Valeur maximale de l'axe Y basée sur les données, plus 1
-                    return Math.max(...context.chart.data.datasets[0].data) + 1;
-                }
-            }
-        },
-        onHover: (event, activeElements) => {
-            event.native.target.style.cursor = activeElements.length > 0 ? 'pointer' : 'crosshair';
-        },
-        onClick: (event, activeElements) => {
-            if (activeElements.length > 0) {
-                const index = activeElements[0].index;
-                const canvasPosition = Chart.helpers.getRelativePosition(event, chart);
-                const dataY = chart.scales.y.getValueForPixel(canvasPosition.y);
-                if (index >= 0 && index <= 25) {
-                    const dataY = chart.scales.y.getValueForPixel(canvasPosition.y);
-                    const newTemp = Math.max(globalMinTempSet, Math.min(globalMaxTempSet, dataY));
-                    updateTemperatureFromExtendedIndex(index, newTemp);
-                }
-
-            }
         }
-    }
-};
+    };
 
-// Initialisation du graphique
-function initChart() {
-    const ctx = document.getElementById('temperatureChart').getContext('2d');
-    
-    // Vérifier que l'élément canvas existe
-    if (!ctx) {
-        console.error("Élément canvas 'temperatureChart' non trouvé");
-        return;
-    }
-    extendedTemperatureData = [temperatureData[temperatureData.length - 1], ...temperatureData, temperatureData[0]];
+    // ✅ Initialiser le graphique
     chart = new Chart(ctx, chartConfig);
 
-    // Vérifier que le graphique a été créé avec succès
-    if (!chart) {
-        console.error("Erreur lors de la création du graphique Chart.js");
-        return;
-    }
+    // 🎛️ Ajout des événements
+    canvas.addEventListener('mousedown', startDrag);
+    canvas.addEventListener('mousemove', drag);
+    canvas.addEventListener('mouseup', endDrag);
+    canvas.addEventListener('mouseleave', endDrag);
 
-    // Gestion du drag pour modifier les températures
-    ctx.canvas.addEventListener('mousedown', startDrag);
-    ctx.canvas.addEventListener('mousemove', drag);
-    ctx.canvas.addEventListener('mouseup', endDrag);
-    ctx.canvas.addEventListener('mouseleave', endDrag);
+    canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
+    canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+    canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
 
-    // Gestion tactile pour les appareils mobiles
-    ctx.canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
-    ctx.canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
-    ctx.canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
-
-    // Initialiser l'affichage
+    // 🔁 Initialiser l’affichage
     updateTempGrid();
     updateStatus();
-    
-    // Exposer les variables globalement après initialisation pour les autres modules
+
+    // 🌐 Rendre accessibles les objets globalement
     window.temperatureChart = chart;
     window.temperatureData = temperatureData;
     window.extendedTemperatureData = extendedTemperatureData;
@@ -277,6 +442,7 @@ function initChart() {
     window.updateStatus = updateStatus;
     window.updateChartAndGrid = updateChartAndGrid;
     window.chart = chart;
+
     console.log("✅ Graphique de température initialisé avec succès");
 }
 
@@ -390,10 +556,10 @@ function updateTemperature(hour, temp) {
 
 // Fonction updateTempGrid
 function updateTempGrid() {
-    const grid = document.getElementById('tempGrid');
+    const grid = document.getElementById('temperatureChart');
 
     if (!grid) {
-        console.warn("⚠️ Élément 'tempGrid' non trouvé");
+        console.warn("⚠️ Élément 'temperatureChart' non trouvé");
         return;
     }
 
@@ -426,28 +592,6 @@ function updateTempGrid() {
 
         grid.appendChild(hourControl);
     });
-}
-
-// Fonction updateStatus
-function updateStatus() {
-    // Mettre à jour l'heure actuelle
-    const currentHourElement = document.getElementById('currentHour');
-    if (currentHourElement) {
-        currentHourElement.textContent = currentHour + 'h';
-    }
-    
-    // Mettre à jour la température cible
-    const targetTempElement = document.getElementById('targetTemp');
-    if (targetTempElement && temperatureData[currentHour] !== undefined) {
-        targetTempElement.textContent = temperatureData[currentHour].toFixed(1) + '°C';
-    }
-    
-    // Mettre à jour les statistiques de la courbe
-    const minTemp = Math.min(...temperatureData);
-    const maxTemp = Math.max(...temperatureData);
-    const avgTemp = temperatureData.reduce((sum, temp) => sum + temp, 0) / temperatureData.length;
-    
-    console.log(`📊 Stats courbe - Min: ${minTemp.toFixed(1)}°C, Max: ${maxTemp.toFixed(1)}°C, Moy: ${avgTemp.toFixed(1)}°C`);
 }
 
 // Fonction de validation de l'initialisation
@@ -489,7 +633,6 @@ function applyPreset(preset) {
                 if (i >= 16 && i < 22) return 26;
                 return 24;
             });
-            updateChartAndGrid();
             break;
         case 'foret':
             temperatureData = Array(24).fill(0).map((_, i) => {
@@ -498,13 +641,11 @@ function applyPreset(preset) {
                 if (i >= 16 && i < 22) return 25;
                 return 23;
             });
-            updateChartAndGrid();
             break;
         case 'tropical':
             temperatureData = Array(24).fill(0).map((_, i) => {
                 return 28 + Math.sin((i - 8) / 24 * Math.PI * 2) * 4;
             });
-            updateChartAndGrid();
             break;
         case 'desert':
             temperatureData = Array(24).fill(0).map((_, i) => {
@@ -513,7 +654,6 @@ function applyPreset(preset) {
                 if (i >= 17 && i < 23) return 28;
                 return 23;
             });
-            updateChartAndGrid();
             break;
         case 'copie':
             // Afficher un message de chargement dans la console
@@ -531,13 +671,15 @@ function applyPreset(preset) {
             return; // Sortir ici car la mise à jour se fait de manière asynchrone
         case 'constant':
             temperatureData = Array(24).fill(25);
-            updateChartAndGrid();
             break;
         default:
             // Mise à jour pour tous les autres cas
-            updateChartAndGrid();
+
             break;
     }
+    
+    reapplyTemperatureLimits();
+    updateChartAndGrid();
 }
 
 // Fonction helper pour centraliser la mise à jour 
@@ -616,7 +758,7 @@ async function fetchLocalDataAndUpdateCurve() {
 function showLoadingIndicator() {
     const indicator = document.createElement('div');
     indicator.id = 'loadingIndicator';
-    indicator.innerHTML = '<div style="text-align: center; padding: 20px; color: #fff;">🌡️ Récupération des données météo...</div>';
+    indicator.innerHTML = '<div style="text-align: center; padding: 20px; color: #fff;">Traitement des données</div>';
     document.body.appendChild(indicator);
 }
 
@@ -634,106 +776,214 @@ function smoothCurve() {
 		smoothed[i] = (temperatureData[i-1] + temperatureData[i] + temperatureData[i+1]) / 3;
 	}
 	temperatureData = smoothed;
-	chart.data.datasets[0].data = [...temperatureData];
+    let extendedTemperatureData = [temperatureData[temperatureData.length - 1], ...temperatureData, temperatureData[0]];
+	chart.data.datasets[0].data = [...extendedTemperatureData];
 	chart.update();
 	updateTempGrid();
 }
 
 function resetToDefault() {
+     
 	temperatureData = Array(24).fill(0).map((_, i) => 24 + Math.sin(i-6 / 24 * Math.PI * 2) * 6);
-	chart.data.datasets[0].data = [...temperatureData];
+    let extendedTemperatureData = [temperatureData[temperatureData.length - 1], ...temperatureData, temperatureData[0]];
+	chart.data.datasets[0].data = [...extendedTemperatureData];
 	chart.update();
 	updateTempGrid();
 	updateStatus();
 }
-
+// ✅ Sauvegarder un nouveau profil
 function saveProfile() {
-	const profile = {
-		name: prompt('Nom du profil:', 'Mon Profil'),
-		temperatures: [...temperatureData],
-		timestamp: new Date().toISOString()
-	};
+    let name = prompt('Nom du profil :', 'Profil');
+    if (!name || !/^[\w\d _-]+$/.test(name)) {
+        alert('⛔ Nom invalide (lettres, chiffres, espace, - et _ autorisés)');
+        return;
+    }
+
+    const profile = {
+        name,
+        temperatures: [...temperatureData],
+        timestamp: new Date().toISOString()
+    };
+
+    fetch('/saveProfile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(profile)
+    })
+    
+    .then(res => res.text())
+    .then(msg => alert('✅ ' + msg))
+    .catch(err => alert('❌ ' + err.message));
+
+    refreshProfileList();
 }
 
-function loadProfile() {
-	loadFromDevice();
-}
+// ✅ Rafraîchir la liste HTML des profils dans la page
+async function refreshProfileList() {
+    const ul = document.getElementById('profileList');
+    ul.innerHTML = '<li>Chargement...</li>';
 
-async function sendToDevice() {
     try {
-        // Envoyer chaque point de température
-        for (let hour = 0; hour < temperatureData.length; hour++) {
-            const response = await fetch(`/setTemp?hour=${hour}&temp=${temperatureData[hour]}`);
-            if (!response.ok) {
-                throw new Error(`Erreur HTTP: ${response.status}`);
-            }
+        const res = await fetch('/listProfiles');
+        const profiles = await res.json();
+
+        ul.innerHTML = '';
+        profiles.forEach(name => {
+            const li = document.createElement('li');
+            li.classList.add('flex', 'justify-between', 'items-center', 'border-b', 'pb-1');
+
+            li.innerHTML = `
+                <span>${name}</span>
+                <div class="flex space-x-1">
+                    <button onclick="loadNamedProfile('${name}')" title="Charger">📂</button>
+                    <button onclick="renameProfile('${name}')" title="Renommer">✏️</button>
+                    <button onclick="deleteProfile('${name}')" title="Supprimer">🗑️</button>
+                    <a href="/downloadProfile?name=${encodeURIComponent(name)}" download title="Télécharger">⬇️</a>
+                </div>
+            `;
+            ul.appendChild(li);
+        });
+    } catch (err) {
+        ul.innerHTML = '<li class="text-red-500">Erreur de chargement</li>';
+        console.error(err);
+    }
+}
+// ✅ Charger un profil par nom (utilisé dans la liste)
+async function loadNamedProfile(name) {
+    try {
+        const url = '/loadNamedProfile?name=' + encodeURIComponent(name);
+        //console.log("[DEBUG JS] Requête vers :", url);
+
+        const res = await fetch(url);
+        //console.log("[DEBUG JS] Statut réponse :", res.status);
+
+        if (!res.ok) throw new Error('Fichier non trouvé');
+
+        const profile = await res.json();
+        //console.log("[DEBUG JS] Contenu JSON :", profile);
+
+        temperatureData = profile.temperatures;
+        updateChartAndGrid();
+        reapplyTemperatureLimits();
+        alert('✅ Profil chargé : ' + name);
+    } catch (e) {
+        alert('❌ ' + e.message);
+        //console.error("[DEBUG JS] Erreur:", e);
+    }
+}
+// ✅ Supprimer un profil
+async function deleteProfile(name) {
+    if (!confirm(`Supprimer le profil "${name}" ?`)) return;
+    await fetch(`/deleteProfile?name=${encodeURIComponent(name)}`);
+    refreshProfileList();
+}
+// ✅ Renommer un profil
+async function renameProfile(oldName) {
+    let newName = prompt("Nouveau nom :", oldName.replace('.json', ''));
+    if (!newName || newName === oldName) return;
+    if (!newName || !/^[\w\d _-]+$/.test(newName)) {
+        alert('⛔ Nom invalide (lettres, chiffres, espace, - et _ autorisés)');
+        return;
+    }
+
+    const res = await fetch(`/renameProfile?from=${encodeURIComponent(oldName)}&to=${encodeURIComponent(newName)}`);
+    if (res.ok) {
+        alert('✅ Profil renommé');
+        refreshProfileList();
+    } else {
+        alert('❌ Erreur lors du renommage');
+    }
+}
+// ✅ Charger un profil via prompt
+async function loadProfile() {
+    try {
+        const res = await fetch('/listProfiles');
+        if (!res.ok) throw new Error('Erreur réseau');
+        const profiles = await res.json();
+
+        if (!profiles.length) {
+            alert('❌ Aucun profil personnalisé trouvé');
+            return;
         }
-        
-        // Activer le mode courbe de température
-        await fetch('/setTempCurveMode?enabled=1');
-        
-        // Feedback visuel
-        const btn = document.getElementById('sendToDeviceBtn');
-        if (btn) {
-            btn.textContent = '✅ Envoyé !';
-            setTimeout(() => {
-                btn.textContent = '📡 Envoyer au Tapis';
-            }, 2000);
+
+        const name = prompt("Choisir un profil à charger :\n" + profiles.join('\n'));
+        if (!name || !profiles.includes(name)) {
+            alert('⛔ Profil invalide ou annulé');
+            return;
         }
-    } catch (error) {
-        console.error('Erreur:', error);
-        alert('Erreur lors de l\'envoi: ' + error.message);
+
+        const fileRes = await fetch('/' + encodeURIComponent(name));
+        if (!fileRes.ok) throw new Error('Fichier introuvable');
+        const profile = await fileRes.json();
+
+        temperatureData = profile.temperatures;
+        updateChartAndGrid();
+        alert('✅ Profil chargé : ' + name);
+
+    } catch (err) {
+        alert('❌ Erreur : ' + err.message);
     }
 }
 
-async function sendToDevice2() {
-	try {
-		// Envoyer les données de température
-		const response = await fetch('/setTempCurve', {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json'
-			},
-			body: JSON.stringify(temperatureData)
-		});
-		
-		if (response.ok) {
-			// Activer le mode courbe de température
-			await fetch('/setTempCurveMode?enabled=1');
-			
-			const btn = event.target;
-			const originalText = btn.textContent;
-			btn.textContent = '✅ Envoyé !';
-			btn.style.background = 'linear-gradient(45deg, #2ecc71, #27ae60)';
-			
-			setTimeout(() => {
-				btn.textContent = originalText;
-				btn.style.background = '';
-			}, 2000);
-		} else {
-			const error = await response.text();
-			alert('Erreur: ' + error);
-		}
-	} catch (error) {
-		alert('Erreur de connexion: ' + error.message);
-	}
-}
+// Importer un fichier JSON depuis l'utilisateur
+document.getElementById('profileUpload').addEventListener('change', async (event) => {
+	const file = event.target.files[0];
+	if (!file) return;
 
-async function loadFromDevice() {
-	try {
-		const response = await fetch('/getTempCurve');
-		if (response.ok) {
-			const data = await response.json();
-			temperatureData = data;
-			chart.data.datasets[0].data = [...temperatureData];
-			chart.update();
-			updateTempGrid();
-			updateStatus();
-			alert('✅ Configuration chargée depuis le tapis chauffant !');
+	const reader = new FileReader();
+	reader.onload = async function (e) {
+		try {
+			const json = JSON.parse(e.target.result);
+			if (!json.name || !json.temperatures) throw new Error("Format invalide");
+
+			const response = await fetch('/uploadProfile', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(json)
+			});
+			if (response.ok) {
+				alert("✅ Profil importé");
+				refreshProfileList();
+			} else {
+				alert("❌ Erreur lors de l'importation");
+			}
+		} catch (e) {
+			alert("❌ Fichier invalide : " + e.message);
 		}
-	} catch (error) {
-		alert('Erreur de chargement: ' + error.message);
-	}
+	};
+	reader.readAsText(file);
+});
+
+// Dans configuration.js - remplacer loadFromDevice() par:
+async function loadFromDevice() {
+    if (!chart) {
+        console.warn("⏳ Chart non encore prêt, tentative retardée...");
+        setTimeout(loadFromDevice, 400);
+        return;
+    }
+
+    try {
+        // 1. Charger la courbe de température
+        const response = await fetch('/getTempCurve');
+        if (response.ok) {
+            const data = await response.json();
+            temperatureData = data;
+            extendedTemperatureData = [
+                temperatureData[temperatureData.length - 1],
+                ...temperatureData,
+                temperatureData[0]
+            ];
+            chart.data.datasets[0].data = extendedTemperatureData;
+            chart.update();
+            updateTempGrid();
+            updateStatus();
+            reapplyTemperatureLimits();
+        }
+        
+               
+    } catch (error) {
+        console.error("❌ Erreur lors du chargement des données :", error);
+    }
 }
 
 // Fonction pour mettre à jour l'heure actuelle
@@ -766,11 +1016,7 @@ function validateCoordinates(lat, lon) {
   
   return { valid: true };
 }
-
-// ========================================
-// 5. MISE À JOUR DE updateVisibility()
-// ========================================
-
+//  MISE À JOUR DE updateVisibility()
 function updateVisibility() {
     // PWM settings
     const pwmChecked = document.getElementById("usePWM").checked;
@@ -807,6 +1053,19 @@ function updateVisibility() {
     if (limitTempDiv) limitTempDiv.style.display = limitTempChecked ? "block" : "none";
 }
 
+function reapplyTemperatureLimits() {
+    const useLimit = document.getElementById("useLimitTemp").checked;
+    if (!useLimit) return;
+
+    const min = parseFloat(document.getElementById("minTempSet").value);
+    const max = parseFloat(document.getElementById("maxTempSet").value);
+
+    temperatureData = temperatureData.map(temp =>
+        Math.min(max, Math.max(min, temp))
+    );
+
+    updateChartAndGrid();
+}
 // Fonction pour mettre à jour les valeurs globales
 function updateGlobalTemps() {
     const minTempInput = document.getElementById("minTempSet");
@@ -818,10 +1077,25 @@ function updateGlobalTemps() {
     console.log(`Températures mises à jour : Min = ${globalMinTempSet}, Max = ${globalMaxTempSet}`);
 }
 
-// Initialisation
-window.addEventListener('load', function() {
-	initChart();
-	loadFromDevice(); // Charger les données existantes
-	setInterval(updateCurrentHour, 60000);
-	setInterval(updateStatus, 10000);
-});
+function updateStatus() {
+}
+
+function saveConfigurationled() {
+	const state = ledToggle.checked;
+	const brightness = brightnessSlider.value;
+	const color = $("#color-picker").spectrum("get").toHexString();
+
+	// Conversion de la couleur hexadécimale en composantes RGB
+	const red = parseInt(color.substr(1, 2), 16);
+	const green = parseInt(color.substr(3, 2), 16);
+	const blue = parseInt(color.substr(5, 2), 16);
+
+	// Envoi des paramètres au serveur
+	fetch(`/updateLed?state=${state}&brightness=${brightness}&red=${red}&green=${green}&blue=${blue}`)
+		.then(response => response.text())
+		.then(data => console.log(data))
+		.catch(error => console.error('Erreur:', error));
+}
+
+
+

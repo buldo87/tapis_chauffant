@@ -1,28 +1,27 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<!--  Genspark -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="/css/style.css">
-    <title>Contrôleur Vivarium Fourmis</title>
+    <title>Contrôleur Vivarium</title>
     <link rel="icon" type="image/x-icon" href="/images/favicon.ico">
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/spectrum/1.8.0/spectrum.min.css">
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <style>
-
-    </style>
 </head>
 <body>
     <div class="container mx-auto px-4 py-6 max-w-7xl">
         <!-- Header -->
         <div class="text-center mb-8 fade-in">
             <h1 class="text-4xl font-bold mb-2">
-                <i class="fas fa-bug text-orange-500 mr-3"></i>
-                Contrôleur Vivarium
+                <i class="fas text-orange-500 mr-3"></i>
+                Contrôleur Vivarium 
             </h1>
         </div>
 
@@ -65,13 +64,19 @@
                 </div>
                 
                 <div class="metric-card fade-in">
-                    <div class="metric-label">État Chauffage</div>
+                    <div class="metric-label">🔥État Chauffage</div>
                     <div id="heaterState" class="metric-value">--</div>
+
                     <div class="text-sm text-gray-400">
-                        Mode: <span id="currentMode">--</span>
+                        Mode : <span id="currentMode">--</span>
                     </div>
-                     <div class="text-sm text-gray-400">
-                        Consigne: <span id="consigneTemp">--°C</span>
+
+                    <div class="text-sm text-gray-400" id="modeDetails">
+                        <!-- PID ou hystérésis -->
+                    </div>
+
+                    <div class="text-sm text-gray-400">
+                        Consigne : <span id="consigneTemp">--°C</span>
                     </div>
                 </div>
                 
@@ -80,8 +85,11 @@
                     <div class="metric-value text-lg">
                         <span class="status-indicator status-online"></span>WiFi
                     </div>
-                    <div class="text-sm text-gray-400" id="currentTime">--:--</div>
-                    <span>Heure actuelle: <strong id="currentHour">12h</strong></span>
+                    <div class="metric-value text-lg">
+                        <span id="led-dot" class="status-indicator" style="background-color: #000;"></span>
+                        <span> LED</span>
+                    </div>
+                    <div class="text-sm text-gray-400  mt-2" id="currentTime">--:--</div>
                 </div>
             </div>
 
@@ -115,8 +123,8 @@
                     Stream Caméra
                 </h3>
                 <div class="flex justify-center">
-                    <img id="camStream" class="rounded-lg border border-gray-600 max-w-full h-auto" 
-                         src="/capture" alt="Stream caméra" style="max-height: 400px;">
+                    <img id="camStream" class="rounded-lg border border-gray-800 max-w-full h-auto responsive-img" 
+                         src="/capture" alt="Stream caméra" >
                 </div>
             </div>
 
@@ -140,26 +148,56 @@
 
                     <div class="controls">
                         <div class="control-group">
-                            <h3>🎛️ Contrôles Rapides</h3>
+                            <h3>🎛️ Profils Prédéfinis</h3>
                             <div class="px-6 py-3 rounded-md duration-300">
-                                <button class="btn-primary" onclick="sendToDevice()">📡 Envoyer au Tapis</button>
                                 <button class="btn-secondary" onclick="smoothCurve()">🌊 Lisser la Courbe</button>
-                                <button class="btn-success" onclick="saveProfile()">💾 Sauvegarder</button>
-                                <button class="btn-warning" onclick="loadProfile()">📂 Charger</button>
-                            </div>
-                            
+                                                                
                             <div class="preset-section">
-                                <h4 style="color: #b0b0b0; margin-bottom: 10px;">Profils Prédéfinis :</h4>
-                                <div class="px-6 py-3 rounded-md duration-300">
-                                    <button class="preset-btn" onclick="applyPreset('mer')">🦎 Bord de mer (24-29°C)</button>
-                                    <button class="preset-btn" onclick="applyPreset('foret')">🐸 Forêt (23-28°C)</button>
-                                    <button class="preset-btn" onclick="applyPreset('tropical')">🌴 Tropical (28-32°C)</button>
-                                    <button class="preset-btn" onclick="applyPreset('desert')">🏜️ Désert (23-32°C)</button>
-                                    <button class="preset-btn" onclick="applyPreset('constant')">⚖️ Constant (25°C)</button>
-                                    <button id="copieSettings" class="preset-btn" style="display: none;" onclick="applyPreset('copie')">🌍 Données Météo Locales</button>
-                                    <button class="preset-btn" onclick="resetToDefault()">🔄 Réinitialiser</button>
+                                <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-4 text-sm">
+                                <button class="preset-btn" onclick="applyPreset('mer')">
+                                    🐚 <span class="ml-1">Bord de mer (24–29 °C)</span>
+                                </button>
+                                <button class="preset-btn" onclick="applyPreset('foret')">
+                                    🍃 <span class="ml-1">Forêt (23–28 °C)</span>
+                                </button>
+                                <button class="preset-btn" onclick="applyPreset('tropical')">
+                                    🌴 <span class="ml-1">Tropical (28–32 °C)</span>
+                                </button>
+                                <button class="preset-btn" onclick="applyPreset('desert')">
+                                    ☀️ <span class="ml-1">Désert (23–32 °C)</span>
+                                </button>
+                                <button class="preset-btn" onclick="applyPreset('constant')">
+                                    ⚖️ <span class="ml-1">Constant (25 °C)</span>
+                                </button>
+                                <button id="copieSettings" class="preset-btn" onclick="applyPreset('copie')" style="display: none;">
+                                    🌍 <span class="ml-1">Copie météo locales</span>
+                                </button>
+                                <button class="preset-btn" onclick="resetToDefault()">
+                                    ♻️ <span class="ml-1">Réinitialiser</span>
+                                </button>
                                 </div>
+
                             </div>
+                        <!-- === GESTION DES PROFILS – DARK MODE === -->
+                        <div class="card mt-8 p-4 rounded-md shadow-md bg-gray-800 text-gray-100">
+                        <h3 class="text-xl font-semibold mb-4">📁 Gestion des Profils Utilisateus</h3>
+                        <button class="btn-success" onclick="saveProfile()">💾 Sauvegarder le profil</button>
+                        <button class="btn-warning" onclick="refreshProfileList()">🔄 Actualiser la liste</button>
+                        
+                        <!-- Liste des profils -->
+                        <ul id="profileList" class="space-y-2 text-sm bg-gray-900 p-3 rounded border border-gray-700 max-h-60 overflow-y-auto">
+                            <li>Chargement...</li>
+                        </ul>
+
+                        <!-- Importation -->
+                        <div class="mt-4">
+                            <label for="profileUpload" class="block text-sm font-medium text-gray-300 mb-1">📤 Importer un profil (.json)</label>
+                            <input type="file" id="profileUpload" accept=".json"
+                            class="block w-full text-sm text-gray-200 bg-gray-700 border border-gray-600 rounded px-2 py-1 focus:outline-none focus:ring focus:border-blue-400" />
+                        </div>
+                        </div>
+
+
                         </div>
                     </div>
 
@@ -260,8 +298,8 @@
                             <input type="number" id="hysteresisSet" class="input-field" min="0.1" max="2" step="0.1" value="0.2">
                         </div>
                     </div>
-                     <br> </br>
-                    <div class="mb-6">
+                     
+                    <div class="mb-6 mt-8">
                         <label class="flex items-center justify-between">
                             <span>Limiter la température</span>
                             <label class="toggle-switch">
@@ -304,30 +342,44 @@
                     
                     <div class="mb-4">
                         <label class="block text-sm font-medium mb-2">Qualité Stream</label>
-                        <select id="cameraQuality" class="input-field">
+                        <select id="cameraResolution" class="input-field">
                             <option value="qvga">QVGA (320x240)</option>
+                            <option value="vga">VGA (640x480)</option>
                             <option value="svga">SVGA (800x600)</option>
                         </select>
                     </div>
-                    
-                    <div>
-                        <h4 class="text-lg font-medium mb-4">Éclairage LED</h4>
-                        <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium mb-2">Intensité (%)</label>
-                                <input type="range" id="ledIntensity" class="w-full" min="0" max="100" value="50">
-                                <span id="ledIntensityValue" class="text-sm text-gray-400">50%</span>
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium mb-2">Couleur</label>
-                                <select id="ledColor" class="input-field">
-                                    <option value="white">Blanc</option>
-                                    <option value="red">Rouge</option>
-                                </select>
-                            </div>
+						 <!-- LED Control -->
+                <div class="card">
+                    <h3 class="text-xl font-semibold mb-6 flex items-center">
+                        <i class="fas fa-lightbulb text-yellow-400 mr-2"></i>
+                        Contrôle LED
+                    </h3>
+
+                    <div class="mb-6">
+                        <label class="flex items-center justify-between">
+                            <span>Allumer / Éteindre</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="led-toggle">
+                                <span class="slider"></span>
+                            </label>
+                        </label>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium mb-2">Intensité</label>
+                        <div class="flex items-center">
+                            <input type="range" id="brightness-slider" min="0" max="255" value="255" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                            <span id="brightness-value" class="ml-4 text-lg font-semibold">255</span>
                         </div>
                     </div>
+
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium mb-2">Couleur</label>
+                        <input type="color" id="color-picker" value="#ffffff" class="input-field w-full h-10 p-1">
+                    </div>
                 </div>
+ 
+			  </div>
 
                 <!-- Save Configuration -->
                 <div class="card">
@@ -335,23 +387,24 @@
                         <i class="fas fa-save text-green-500 mr-2"></i>
                         Sauvegarde
                     </h3>
-                    <p class="text-gray-400 mb-6">
-                        Sauvegarder tous les paramètres dans la mémoire de l'ESP32. 
-                        Les paramètres seront conservés même en cas de coupure d'électricité.
-                    </p>
-                    <button id="applyBtn" class="btn-primary w-full">
+                    
+                    <button id="applyBtn" class="btn-primary w-full" onclick="applyAllSettings()">
                         <i class="fas fa-download mr-2"></i>
                         Sauvegarder Configuration
                     </button>
+
                 </div>
             </div>
         </div>
     </div>
     <!-- Scripts -->
+	<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/spectrum/1.8.0/spectrum.min.js"></script>  
     <script src="/js/api.js"></script>
     <script src="/js/surveillance.js"></script>
     <script src="/js/configuration.js"></script>
     <script src="/js/main.js"></script>
     <script src="/js/map.js"></script>
+
 </body>
 </html>

@@ -1,9 +1,4 @@
 // js/api.js
-
-/**
- * Module API - Gestion des requêtes vers l'ESP32 et les services externes
- */
-
 // Fonction pour la mise à jour de la courbe
 function updateTemperatureCurve(newTemperatureData) {
     if (typeof window.temperatureData !== 'undefined' && typeof window.chart !== 'undefined') {

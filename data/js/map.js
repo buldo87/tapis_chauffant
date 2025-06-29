@@ -1,8 +1,4 @@
 // js/map.js
-/**
- * Module de gestion de carte interactive pour la sélection de coordonnées
- */
-
 let map = null;
 let currentMarker = null;
 let mapVisible = false;
