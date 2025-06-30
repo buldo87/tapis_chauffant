@@ -1,11 +1,11 @@
-// js/map.js
-let map = null;
-let currentMarker = null;
-let mapVisible = false;
+// js/map.js - Carte Leaflet pour la géolocalisation
+let leafletMapInstance = null;
+let leafletMarker = null;
+let isMapVisible = false;
 
 // Initialisation de la carte
 function initMap() {
-    if (map) {
+    if (leafletMapInstance) {
         return; // Carte déjà initialisée
     }
     
@@ -18,13 +18,13 @@ function initMap() {
     const currentLon = parseFloat(document.getElementById('lonInput').value) || defaultLon;
     
     // Créer la carte
-    map = L.map('map').setView([currentLat, currentLon], 10);
+    leafletMapInstance = L.map('map').setView([currentLat, currentLon], 10);
     
     // Ajouter les tuiles OpenStreetMap (gratuit)
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors',
         maxZoom: 18
-    }).addTo(map);
+    }).addTo(leafletMapInstance);
     
     // Ajouter un marqueur à la position actuelle
     if (currentLat && currentLon) {
@@ -32,7 +32,7 @@ function initMap() {
     }
     
     // Gestionnaire de clic sur la carte
-    map.on('click', function(e) {
+    leafletMapInstance.on('click', function(e) {
         const lat = e.latlng.lat;
         const lon = e.latlng.lng;
         
@@ -51,29 +51,29 @@ function initMap() {
 // Ajouter ou déplacer le marqueur
 function addMarker(lat, lon) {
     // Supprimer le marqueur existant
-    if (currentMarker) {
-        map.removeLayer(currentMarker);
+    if (leafletMarker) {
+        leafletMapInstance.removeLayer(leafletMarker);
     }
     
     // Créer un nouveau marqueur
-    currentMarker = L.marker([lat, lon], {
+    leafletMarker = L.marker([lat, lon], {
         draggable: true
-    }).addTo(map);
+    }).addTo(leafletMapInstance);
     
     // Popup avec les coordonnées
-    currentMarker.bindPopup(`
+    leafletMarker.bindPopup(`
         <b>📍 Position sélectionnée</b><br>
         Latitude: ${lat.toFixed(4)}<br>
         Longitude: ${lon.toFixed(4)}
     `).openPopup();
     
     // Gestionnaire de drag du marqueur
-    currentMarker.on('dragend', function(e) {
+    leafletMarker.on('dragend', function(e) {
         const newPos = e.target.getLatLng();
         updateCoordinates(newPos.lat, newPos.lng);
         
         // Mettre à jour le popup
-        currentMarker.bindPopup(`
+        leafletMarker.bindPopup(`
             <b>📍 Position sélectionnée</b><br>
             Latitude: ${newPos.lat.toFixed(4)}<br>
             Longitude: ${newPos.lng.toFixed(4)}
@@ -98,23 +98,23 @@ function toggleMap() {
     const mapContainer = document.getElementById('mapContainer');
     const toggleBtn = document.getElementById('mapToggleBtn');
     
-    if (!mapVisible) {
+    if (!isMapVisible) {
         // Afficher la carte
         mapContainer.style.display = 'block';
         toggleBtn.innerHTML = '🗺️ Fermer la Carte';
-        mapVisible = true;
+        isMapVisible = true;
         
         // Initialiser la carte si nécessaire
-        if (!map) {
+        if (!leafletMapInstance) {
             setTimeout(() => {
                 initMap();
                 // Redimensionner la carte après affichage
-                map.invalidateSize();
+                leafletMapInstance.invalidateSize();
             }, 100);
         } else {
             // Redimensionner la carte existante
             setTimeout(() => {
-                map.invalidateSize();
+                leafletMapInstance.invalidateSize();
             }, 100);
         }
         
@@ -122,14 +122,14 @@ function toggleMap() {
         // Masquer la carte
         mapContainer.style.display = 'none';
         toggleBtn.innerHTML = '🗺️ Ouvrir la Carte';
-        mapVisible = false;
+        isMapVisible = false;
     }
 }
 
 // Centrer la carte sur une position
 function centerMapOn(lat, lon, zoom = 12) {
-    if (map) {
-        map.setView([lat, lon], zoom);
+    if (leafletMapInstance) {
+        leafletMapInstance.setView([lat, lon], zoom);
         addMarker(lat, lon);
     }
 }
@@ -157,7 +157,7 @@ function getCurrentLocation() {
             updateCoordinates(lat, lon);
             
             // Centrer la carte si elle est visible
-            if (mapVisible && map) {
+            if (isMapVisible && leafletMapInstance) {
                 centerMapOn(lat, lon, 14);
             }
             
@@ -220,7 +220,7 @@ function searchLocation() {
                 
                 updateCoordinates(lat, lon);
                 
-                if (mapVisible && map) {
+                if (isMapVisible && leafletMapInstance) {
                     centerMapOn(lat, lon, 12);
                 }
                 

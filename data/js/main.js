@@ -161,7 +161,7 @@ function updateGlobalTemps() {
     }
 }
 
-// Tab switching 
+// Tab switching - Simplifié pour 2 onglets seulement
 function initTabs() {
 	const tabButtons = document.querySelectorAll('.tab-button');
 	const dashboardContent = document.getElementById('dashboardContent');
@@ -172,12 +172,19 @@ function initTabs() {
 			tabButtons.forEach(btn => btn.className = btn.className.replace('tab-active', 'tab-inactive'));
 			button.className = button.className.replace('tab-inactive', 'tab-active');
 			
+			// Hide all content
+			dashboardContent.style.display = 'none';
+			configContent.style.display = 'none';
+			
+			// Show selected content
 			if (button.id === 'tabDashboard') {
 				dashboardContent.style.display = 'block';
-				configContent.style.display = 'none';
-			} else {
-				dashboardContent.style.display = 'none';
+			} else if (button.id === 'tabConfig') {
 				configContent.style.display = 'block';
+				// Initialize seasonal system when config tab is opened
+				if (typeof initSeasonalSystem === 'function') {
+					initSeasonalSystem();
+				}
 			}
 		});
 	});
@@ -409,13 +416,21 @@ function rgbToHex(r, g, b) {
 	return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
 }
 
+// ✅ CORRECTION DU STREAM VIDÉO - Variables globales pour la gestion de la caméra
 let cameraInterval = null;
 let isCameraRunning = false;
 
+// ✅ Fonction corrigée pour le rafraîchissement de la caméra
 function cameraRefreshLoop() {
     if (!isCameraRunning) return; // Arrêter la boucle si la caméra est désactivée
 
     const camStream = document.getElementById('camStream');
+    if (!camStream) {
+        console.warn('❌ Élément camStream non trouvé');
+        isCameraRunning = false;
+        return;
+    }
+
     const tempImg = new Image();
 
     // Si l'image charge avec succès...
@@ -426,26 +441,37 @@ function cameraRefreshLoop() {
 
     // Si une erreur survient...
     tempImg.onerror = () => {
-        console.warn("Erreur de chargement de l'image du flux, nouvelle tentative dans 2s...");
+        console.warn("⚠️ Erreur de chargement de l'image du flux, nouvelle tentative dans 2s...");
         setTimeout(cameraRefreshLoop, 2000); // Réessayer dans 2 secondes
     };
 
-    // Lancer le chargement de l'image
+    // Lancer le chargement de l'image avec timestamp pour éviter le cache
     tempImg.src = '/capture?' + new Date().getTime();
 }
 
+// ✅ Fonction corrigée pour la visibilité de la caméra
 function updateCameraVisibility() {
     const cameraContainer = document.getElementById('cameraContainer');
     const showCamera = document.getElementById('showCamera');
 
+    if (!cameraContainer || !showCamera) {
+        console.warn('❌ Éléments caméra non trouvés');
+        return;
+    }
+
     if (showCamera.checked) {
+        console.log('📹 Activation de la caméra...');
         cameraContainer.style.display = 'block';
+        cameraEnabled = true;
+        
         if (!isCameraRunning) {
             isCameraRunning = true;
             cameraRefreshLoop(); // Démarrer la boucle de rafraîchissement
         }
     } else {
+        console.log('📹 Désactivation de la caméra...');
         cameraContainer.style.display = 'none';
+        cameraEnabled = false;
         isCameraRunning = false; // Arrêter la boucle au prochain tour
     }
 }
@@ -476,7 +502,16 @@ function initEventListeners() {
     if (weatherMode) weatherMode.addEventListener("change", () => {
         if (typeof updateVisibility === 'function') updateVisibility();
     });
+
+    // Nouveau: Gestion du mode saisonnier
+    const seasonalMode = document.getElementById("seasonalMode");
+    if (seasonalMode) {
+        seasonalMode.addEventListener("change", () => {
+            if (typeof updateSeasonalVisibility === 'function') updateSeasonalVisibility();
+        });
+    }
     
+    // ✅ CORRECTION - Gestion de la caméra avec la fonction corrigée
     const showCamera = document.getElementById("showCamera");
     if (showCamera) {
         showCamera.addEventListener("change", updateCameraVisibility);
@@ -596,7 +631,3 @@ document.addEventListener('DOMContentLoaded', async () => {
         alert('Erreur lors de l\'initialisation: ' + error.message);
     }
 });
-
-
-
-

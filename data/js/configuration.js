@@ -1,4 +1,4 @@
- //configuration.js
+//configuration.js
  // coube ajustable
 let chart;
 let temperatureData = Array(24).fill(0).map((_, i) => 22 + Math.sin(i / 24 * Math.PI * 2) * 6); // Courbe sinusoïdale par défaut
@@ -37,7 +37,7 @@ function startImageLoop(img, interval = 1000) {
 		const newImg = new Image();
 
 		newImg.onload = () => {
-			// Remplacer l’image visible seulement après chargement
+			// Remplacer l'image visible seulement après chargement
 			img.src = newImg.src;
 			setTimeout(loadNextImage, interval);
 		};
@@ -74,6 +74,7 @@ function setResolution() {
 function rgbToHex(r, g, b) {
 	return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
 }
+
 function updateVisibility() {
     // PWM settings
     const pwmChecked = document.getElementById("usePWM").checked;
@@ -96,6 +97,11 @@ function updateVisibility() {
     const limitTempDiv = document.getElementById("limitTempSettings");
 
     if (limitTempDiv) limitTempDiv.style.display = limitTempChecked ? "block" : "none";
+
+    // Seasonal visibility - Appeler la fonction dédiée
+    if (typeof updateSeasonalVisibility === 'function') {
+        updateSeasonalVisibility();
+    }
 }
 
 // Dans configuration.js - Modifier loadCurrentConfigToUI()
@@ -120,6 +126,12 @@ async function loadCurrentConfigToUI() {
         document.getElementById("useLimitTemp").checked = !!config.useLimitTemp;
         document.getElementById("maxTempSet").value = config.globalMaxTempSet;
         document.getElementById("minTempSet").value = config.globalMinTempSet;
+
+        // Nouveau: Charger l'état du mode saisonnier
+        const seasonalModeElement = document.getElementById("seasonalMode");
+        if (seasonalModeElement) {
+            seasonalModeElement.checked = !!config.seasonalModeEnabled;
+        }
 
         // 🔧 Configuration LED - SANS appeler saveConfigurationled()
         const ledToggle = document.getElementById("led-toggle");
@@ -184,7 +196,7 @@ function applyAllSettings() {
     const fields = [
         "hysteresisSet", "KpSet", "KiSet", "KdSet",
         "usePWM", "latInput", "lonInput",
-        "weatherMode", "showCamera", "cameraResolution", "useLimitTemp",
+        "weatherMode", "seasonalMode", "showCamera", "cameraResolution", "useLimitTemp",
         "maxTempSet", "minTempSet",
         "led-toggle", "brightness-slider", "color-picker"
     ];
@@ -222,6 +234,7 @@ function applyAllSettings() {
         latitude: parseFloat(get("latInput").value),
         longitude: parseFloat(get("lonInput").value),
         weatherModeEnabled: get("weatherMode").checked ? 1 : 0,
+        seasonalModeEnabled: get("seasonalMode").checked ? 1 : 0, // Nouveau
         cameraEnabled: get("showCamera").checked ? 1 : 0,
 		cameraResolution: get("cameraResolution").value,
         useLimitTemp: get("useLimitTemp").checked ? 1 : 0,
@@ -372,7 +385,7 @@ function initChart() {
                 },
                 title: {
                     display: true,
-                    text: 'Courbe de température sur 24h - Cliquez et glissez pour ajuster',
+                    text: 'Courbe d\'édition du jour - Cliquez et glissez pour ajuster',
                     color: '#ffffff',
                     font: { size: 18 }
                 },
@@ -430,7 +443,7 @@ function initChart() {
     canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
     canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
 
-    // 🔁 Initialiser l’affichage
+    // 🔁 Initialiser l'affichage
     updateTempGrid();
     updateStatus();
 
@@ -791,92 +804,311 @@ function resetToDefault() {
 	updateTempGrid();
 	updateStatus();
 }
-// ✅ Sauvegarder un nouveau profil
+
+// ✅ FONCTION SIMPLIFIÉE - Un seul bouton pour sauvegarder le profil
 function saveProfile() {
-    let name = prompt('Nom du profil :', 'Profil');
+    const name = prompt('Nom du profil :', 'Profil_' + new Date().toISOString().slice(0,10));
     if (!name || !/^[\w\d _-]+$/.test(name)) {
         alert('⛔ Nom invalide (lettres, chiffres, espace, - et _ autorisés)');
         return;
     }
 
-    const profile = {
-        name,
-        temperatures: [...temperatureData],
-        timestamp: new Date().toISOString()
-    };
-
-    fetch('/saveProfile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(profile)
-    })
+    // 🎯 DÉTECTION AUTOMATIQUE DU TYPE DE PROFIL
+    const seasonalMode = document.getElementById("seasonalMode")?.checked || false;
+    const weatherMode = document.getElementById("weatherMode")?.checked || false;
     
-    .then(res => res.text())
-    .then(msg => alert('✅ ' + msg))
-    .catch(err => alert('❌ ' + err.message));
+    // Déterminer si c'est un profil saisonnier ou journalier
+    const isSeasonalProfile = seasonalMode && (typeof seasonalData !== 'undefined' && seasonalData?.isInitialized);
+    
+    console.log(`📊 Création d'un profil ${isSeasonalProfile ? 'SAISONNIER' : 'JOURNALIER'}`);
+    
+    // 📦 CRÉATION DU PROFIL COMPLET avec TOUTES les options
+    const completeProfile = {
+        name: name,
+        timestamp: new Date().toISOString(),
+        version: "2.0",
+        isComplete: true,
+        profileType: isSeasonalProfile ? "saisonnier" : "journalier",
+        
+        // === COURBE DE TEMPÉRATURE (toujours incluse) ===
+        temperatures: [...temperatureData],
+        
+        // === TOUTES LES OPTIONS DE CONFIGURATION ===
+        // Configuration chauffage
+        usePWM: document.getElementById("usePWM")?.checked || false,
+        hysteresis: parseFloat(document.getElementById("hysteresisSet")?.value || 0.3),
+        Kp: parseFloat(document.getElementById("KpSet")?.value || 2.0),
+        Ki: parseFloat(document.getElementById("KiSet")?.value || 5.0),
+        Kd: parseFloat(document.getElementById("KdSet")?.value || 1.0),
+        
+        // Limitations de température
+        useLimitTemp: document.getElementById("useLimitTemp")?.checked || false,
+        globalMinTempSet: parseFloat(document.getElementById("minTempSet")?.value || 15),
+        globalMaxTempSet: parseFloat(document.getElementById("maxTempSet")?.value || 35),
+        
+        // Configuration météo/géolocalisation
+        weatherModeEnabled: weatherMode,
+        latitude: parseFloat(document.getElementById("latInput")?.value || 48.85),
+        longitude: parseFloat(document.getElementById("lonInput")?.value || 2.35),
+        
+        // Configuration saisonnière
+        seasonalModeEnabled: seasonalMode,
+        includeSeasonal: isSeasonalProfile, // Inclure les données saisonnières si mode activé
+        
+        // Configuration caméra
+        cameraEnabled: document.getElementById("showCamera")?.checked || false,
+        cameraResolution: document.getElementById("cameraResolution")?.value || "qvga",
+        
+        // Configuration LED
+        ledState: document.getElementById("led-toggle")?.checked || false,
+        ledBrightness: parseInt(document.getElementById("brightness-slider")?.value || 255),
+        ledRed: 255,
+        ledGreen: 255,
+        ledBlue: 255
+    };
+    
+    // Récupérer la couleur LED
+    try {
+        const color = $("#color-picker").spectrum("get").toHexString();
+        completeProfile.ledRed = parseInt(color.substr(1, 2), 16);
+        completeProfile.ledGreen = parseInt(color.substr(3, 2), 16);
+        completeProfile.ledBlue = parseInt(color.substr(5, 2), 16);
+    } catch (e) {
+        console.warn("⚠️ Impossible de récupérer la couleur LED, valeurs par défaut utilisées");
+    }
+    
+    // 💾 SAUVEGARDE
+    saveProfileToBackend(completeProfile);
+}
 
-    refreshProfileList();
+// ✅ Fonction unifiée pour sauvegarder les profils
+async function saveProfileToBackend(profileData) {
+    try {
+        const response = await fetch('/saveProfile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(profileData)
+        });
+        
+        if (response.status === 507) {
+            // Espace insuffisant - déclencher le nettoyage interactif
+            const errorData = await response.json();
+            if (typeof handleInsufficientSpace === 'function') {
+                handleInsufficientSpace(errorData.requiredBytes);
+            } else {
+                alert(`❌ Espace insuffisant: ${errorData.message}`);
+            }
+            return;
+        }
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        const result = await response.text();
+        alert('✅ ' + result);
+        
+        // Rafraîchir la liste des profils
+        if (typeof refreshProfileList === 'function') {
+            refreshProfileList();
+        }
+        
+    } catch (error) {
+        console.error('❌ Erreur sauvegarde profil:', error);
+        alert('❌ Erreur lors de la sauvegarde: ' + error.message);
+    }
 }
 
 // ✅ Rafraîchir la liste HTML des profils dans la page
 async function refreshProfileList() {
     const ul = document.getElementById('profileList');
+    if (!ul) return;
+    
     ul.innerHTML = '<li>Chargement...</li>';
 
     try {
-        const res = await fetch('/listProfiles');
-        const profiles = await res.json();
+        // Utiliser l'endpoint détaillé s'il existe, sinon l'endpoint standard
+        let response = await fetch('/listProfilesDetailed');
+        if (!response.ok) {
+            response = await fetch('/listProfiles');
+        }
+        
+        const profiles = await response.json();
 
         ul.innerHTML = '';
-        profiles.forEach(name => {
+        
+        if (profiles.length === 0) {
+            ul.innerHTML = '<li class="text-gray-500">Aucun profil trouvé</li>';
+            return;
+        }
+        
+        profiles.forEach(profile => {
             const li = document.createElement('li');
             li.classList.add('flex', 'justify-between', 'items-center', 'border-b', 'pb-1');
 
+            // Déterminer le type de profil
+            const profileType = getProfileType(profile);
+            const profileName = profile.name || profile;
+            
             li.innerHTML = `
-                <span>${name}</span>
+                <div class="flex-1">
+                    <div class="font-medium">${profileName}</div>
+                    ${profile.sizeFormatted ? `
+                        <div class="text-xs text-gray-500">
+                            ${profileType} • ${profile.sizeFormatted} • ${profile.lastModifiedFormatted || ''}
+                        </div>
+                    ` : ''}
+                </div>
                 <div class="flex space-x-1">
-                    <button onclick="loadNamedProfile('${name}')" title="Charger">📂</button>
-                    <button onclick="renameProfile('${name}')" title="Renommer">✏️</button>
-                    <button onclick="deleteProfile('${name}')" title="Supprimer">🗑️</button>
-                    <a href="/downloadProfile?name=${encodeURIComponent(name)}" download title="Télécharger">⬇️</a>
+                    <button onclick="loadNamedProfile('${profileName}')" title="Charger">📂</button>
+                    <button onclick="renameProfile('${profileName}')" title="Renommer">✏️</button>
+                    <button onclick="deleteProfile('${profileName}')" title="Supprimer">🗑️</button>
+                    <a href="/downloadProfile?name=${encodeURIComponent(profileName)}" download title="Télécharger">⬇️</a>
                 </div>
             `;
             ul.appendChild(li);
         });
-    } catch (err) {
+        
+    } catch (error) {
         ul.innerHTML = '<li class="text-red-500">Erreur de chargement</li>';
-        console.error(err);
+        console.error('Erreur liste profils:', error);
     }
 }
+
+// ✅ Fonction pour déterminer le type de profil
+function getProfileType(profile) {
+    if (typeof profile === 'string') {
+        return '📊 Complet';
+    }
+    
+    if (profile.hasSeasonal || profile.profileType === 'saisonnier') {
+        return '🌍 Saisonnier';
+    }
+    
+    if (profile.type) {
+        return profile.type;
+    }
+    
+    // Estimation basée sur la taille
+    if (profile.size) {
+        if (profile.size > 50000) {
+            return '🌍 Saisonnier';
+        }
+    }
+    
+    return '⚙️ Complet';
+}
+
 // ✅ Charger un profil par nom (utilisé dans la liste)
 async function loadNamedProfile(name) {
     try {
         const url = '/loadNamedProfile?name=' + encodeURIComponent(name);
-        //console.log("[DEBUG JS] Requête vers :", url);
-
         const res = await fetch(url);
-        //console.log("[DEBUG JS] Statut réponse :", res.status);
 
-        if (!res.ok) throw new Error('Fichier non trouvé');
+        if (!res.ok) throw new Error('Profil non trouvé');
 
         const profile = await res.json();
-        //console.log("[DEBUG JS] Contenu JSON :", profile);
 
-        temperatureData = profile.temperatures;
-        updateChartAndGrid();
-        reapplyTemperatureLimits();
+        // Appliquer TOUTES les options du profil
+        await applyCompleteProfileToUI(profile);
+        
         alert('✅ Profil chargé : ' + name);
     } catch (e) {
         alert('❌ ' + e.message);
-        //console.error("[DEBUG JS] Erreur:", e);
+        console.error("Erreur chargement profil:", e);
     }
 }
+
+// ✅ Fonction pour appliquer un profil complet à l'interface
+async function applyCompleteProfileToUI(profileData) {
+    // === COURBE DE TEMPÉRATURE (toujours présente) ===
+    if (profileData.temperatures && Array.isArray(profileData.temperatures)) {
+        temperatureData = [...profileData.temperatures];
+        updateChartAndGrid();
+    }
+    
+    // === APPLIQUER TOUTES LES OPTIONS ===
+    // Configuration chauffage
+    setElementValue("usePWM", profileData.usePWM, 'checkbox');
+    setElementValue("hysteresisSet", profileData.hysteresis);
+    setElementValue("KpSet", profileData.Kp);
+    setElementValue("KiSet", profileData.Ki);
+    setElementValue("KdSet", profileData.Kd);
+    
+    // Limitations de température
+    setElementValue("useLimitTemp", profileData.useLimitTemp, 'checkbox');
+    setElementValue("minTempSet", profileData.globalMinTempSet);
+    setElementValue("maxTempSet", profileData.globalMaxTempSet);
+    
+    // Configuration météo
+    setElementValue("weatherMode", profileData.weatherModeEnabled, 'checkbox');
+    setElementValue("latInput", profileData.latitude);
+    setElementValue("lonInput", profileData.longitude);
+    
+    // Configuration saisonnière
+    setElementValue("seasonalMode", profileData.seasonalModeEnabled, 'checkbox');
+    
+    // Configuration caméra
+    setElementValue("showCamera", profileData.cameraEnabled, 'checkbox');
+    setElementValue("cameraResolution", profileData.cameraResolution);
+    
+    // Configuration LED
+    setElementValue("led-toggle", profileData.ledState, 'checkbox');
+    setElementValue("brightness-slider", profileData.ledBrightness);
+    setElementValue("brightness-value", profileData.ledBrightness, 'text');
+    
+    // Appliquer la couleur LED
+    if (profileData.ledRed !== undefined && profileData.ledGreen !== undefined && profileData.ledBlue !== undefined) {
+        const hexColor = rgbToHex(profileData.ledRed, profileData.ledGreen, profileData.ledBlue);
+        try {
+            $("#color-picker").spectrum("set", hexColor);
+        } catch (error) {
+            console.warn('Impossible d\'appliquer la couleur LED:', error);
+        }
+    }
+    
+    // Mettre à jour la visibilité des sections
+    updateVisibility();
+    
+    // Mettre à jour l'affichage LED
+    if (typeof updateLedDot === 'function') {
+        updateLedDot();
+    }
+    
+    // Appliquer les limitations de température
+    reapplyTemperatureLimits();
+    
+    console.log('✅ Profil complet appliqué à l\'interface utilisateur');
+}
+
+// ✅ Fonction helper pour définir la valeur d'un élément
+function setElementValue(elementId, value, type = 'input') {
+    const element = document.getElementById(elementId);
+    if (!element) {
+        console.warn(`Élément ${elementId} non trouvé`);
+        return;
+    }
+    
+    switch (type) {
+        case 'checkbox':
+            element.checked = Boolean(value);
+            break;
+        case 'text':
+            element.textContent = value;
+            break;
+        default:
+            element.value = value;
+            break;
+    }
+}
+
 // ✅ Supprimer un profil
 async function deleteProfile(name) {
     if (!confirm(`Supprimer le profil "${name}" ?`)) return;
     await fetch(`/deleteProfile?name=${encodeURIComponent(name)}`);
     refreshProfileList();
 }
+
 // ✅ Renommer un profil
 async function renameProfile(oldName) {
     let newName = prompt("Nouveau nom :", oldName.replace('.json', ''));
@@ -894,6 +1126,7 @@ async function renameProfile(oldName) {
         alert('❌ Erreur lors du renommage');
     }
 }
+
 // ✅ Charger un profil via prompt
 async function loadProfile() {
     try {
@@ -912,13 +1145,7 @@ async function loadProfile() {
             return;
         }
 
-        const fileRes = await fetch('/' + encodeURIComponent(name));
-        if (!fileRes.ok) throw new Error('Fichier introuvable');
-        const profile = await fileRes.json();
-
-        temperatureData = profile.temperatures;
-        updateChartAndGrid();
-        alert('✅ Profil chargé : ' + name);
+        await loadNamedProfile(name);
 
     } catch (err) {
         alert('❌ Erreur : ' + err.message);
@@ -1016,42 +1243,6 @@ function validateCoordinates(lat, lon) {
   
   return { valid: true };
 }
-//  MISE À JOUR DE updateVisibility()
-function updateVisibility() {
-    // PWM settings
-    const pwmChecked = document.getElementById("usePWM").checked;
-    const pwmDiv = document.getElementById("pwmSettings");
-    const hysteresisDiv = document.getElementById("hysteresisSettings");
-
-    if (pwmDiv) pwmDiv.style.display = pwmChecked ? "block" : "none";
-    if (hysteresisDiv) hysteresisDiv.style.display = pwmChecked ? "none" : "block";
-
-    // Weather settings
-    const weatherChecked = document.getElementById("weatherMode").checked;
-    const weatherDiv = document.getElementById("weatherSettings");
-    const copieButton = document.getElementById("copieSettings");
-
-    if (weatherDiv) weatherDiv.style.display = weatherChecked ? "block" : "none";
-    if (copieButton) copieButton.style.display = weatherChecked ? "inline-block" : "none";
-
-    if (weatherChecked) {
-        // Auto-détection de la position si les champs sont vides
-        const lat = document.getElementById('latInput').value;
-        const lon = document.getElementById('lonInput').value;
-        if (!lat || !lon) {
-			// Position par défaut (Paris)
-			Lat = 48.8566;
-			Lon = 2.3522;
-            //getCurrentLocation();
-        }
-    }
-
-    // Temperature limit settings
-    const limitTempChecked = document.getElementById("useLimitTemp").checked;
-    const limitTempDiv = document.getElementById("limitTempSettings");
-
-    if (limitTempDiv) limitTempDiv.style.display = limitTempChecked ? "block" : "none";
-}
 
 function reapplyTemperatureLimits() {
     const useLimit = document.getElementById("useLimitTemp").checked;
@@ -1096,6 +1287,3 @@ function saveConfigurationled() {
 		.then(data => console.log(data))
 		.catch(error => console.error('Erreur:', error));
 }
-
-
-
