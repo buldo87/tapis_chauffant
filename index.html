@@ -116,33 +116,26 @@
                 </div>
             </div>
 
-
             <!-- Camera Section -->
-
             <div class="card mb-8" id="cameraContainer" style="display: none;">
                 <h3 class="text-xl font-semibold mb-4 flex items-center">
                     <i class="fas fa-video text-purple-500 mr-2"></i>
                     Stream Caméra
                 </h3>
                 <div class="flex justify-center">
-                    <img id="camStream" 
-                        class="rounded-lg border border-gray-800 max-w-full h-auto responsive-img" 
-                        src="/mjpeg" 
-                        style="width: 100%; max-width: 640px;" 
-                        alt="Stream caméra">
-                </div>
-                
-                <!-- Message d'erreur -->
-                <div id="cameraError" style="display: none;" class="mt-4 p-3 bg-red-900 text-red-300 rounded-lg text-center">
-                    ❌ Erreur de connexion au stream caméra. 
-                    <button id="retryCameraBtn" class="ml-2 bg-red-700 px-3 py-1 rounded hover:bg-red-600">
-                        🔄 Réessayer
-                    </button>
+                     <!-- Ou pour les captures simples avec rafraîchissement automatique -->
+                    <img id="camStream" class="rounded-lg border border-gray-800 max-w-full h-auto responsive-img" 
+                          src="/capture" style="width: 100%; max-width: 640px;" alt="Stream caméra" >
+                     <!-- Pour le streaming vidéo en temps réel -->
+                    <!--
+                     <img id="camStream" class="rounded-lg border border-gray-800 max-w-full h-auto responsive-img" 
+                          src="/stream" style="width: 100%; max-width: 640px;" alt="Stream caméra" >
+
+                    -->
+                   
+                    
                 </div>
             </div>
-
-
-
 
         </div>
 
@@ -189,10 +182,7 @@
                             <i class="fas fa-fire text-orange-500 mr-2"></i>
                             📅 Vue Annuelle - Calendrier des Températures
                         </h4>
-                        <div class="text-sm text-gray-400 mb-4">
-                            Profil actif : 
-                            <span id="activeProfileName" class="font-semibold text-green-400">Défaut</span>
-                        </div>
+                        
                         <div class="mb-4">
                             <div class="text-sm text-gray-400 mb-2">
                                 Chaque case représente un jour de l'année. La couleur indique la température moyenne du jour.
@@ -470,17 +460,6 @@
                             <option value="qvga">QVGA (320x240)</option>
                             <option value="vga">VGA (640x480)</option>
                             <option value="svga">SVGA (800x600)</option>
-                        </select>
-                    </div>
-
-                    <div class="mb-4">
-                        <label class="block text-sm font-medium mb-2">Niveau de Log</label>
-                        <select id="logLevel" class="input-field">
-                            <option value="0">None</option>
-                            <option value="1">Error</option>
-                            <option value="2">Warn</option>
-                            <option value="3">Info</option>
-                            <option value="4">Debug</option>
                         </select>
                     </div>
 

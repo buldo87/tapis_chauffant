@@ -135,6 +135,7 @@ function centerMapOn(lat, lon, zoom = 12) {
 }
 
 // Géolocalisation améliorée
+// Dans map.js - Correction de la fonction getCurrentLocation
 function getCurrentLocation() {
     if (!navigator.geolocation) {
         alert('❌ La géolocalisation n\'est pas supportée par votre navigateur');
@@ -167,9 +168,10 @@ function getCurrentLocation() {
             
             console.log(`📍 Position détectée: ${lat.toFixed(4)}, ${lon.toFixed(4)} (précision: ${accuracy.toFixed(0)}m)`);
             
-            // Afficher une confirmation
-            alert(`✅ Position détectée avec succès !\nLatitude: ${lat.toFixed(4)}\nLongitude: ${lon.toFixed(4)}\nPrécision: ${accuracy.toFixed(0)}m`);
-        },
+            // Afficher une confirmation - CORRECTION ICI
+            alert('✅ Position détectée avec succès !\\nLatitude: ' + lat.toFixed(4) + '\\nLongitude: ' + lon.toFixed(4) + '\\nPrécision: ' + accuracy.toFixed(0) + 'm');
+         },
+         
         (error) => {
             // Restaurer le bouton
             btn.innerHTML = originalText;
@@ -199,17 +201,15 @@ function getCurrentLocation() {
             timeout: 10000,
             maximumAge: 300000 // 5 minutes
         }
-    );
+    ); // ← Vérifiez que cette parenthèse ferme bien la fonction
 }
-
 // Recherche d'adresse (optionnel - nécessite une API de géocodage)
 function searchLocation() {
     const address = prompt('🔍 Entrez une adresse ou nom de lieu:');
     if (!address) return;
-    
-    // Utilisation de l'API Nominatim (gratuite) pour le géocodage
+
     const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1`;
-    
+
     fetch(url)
         .then(response => response.json())
         .then(data => {
@@ -217,13 +217,10 @@ function searchLocation() {
                 const result = data[0];
                 const lat = parseFloat(result.lat);
                 const lon = parseFloat(result.lon);
-                
                 updateCoordinates(lat, lon);
-                
                 if (isMapVisible && leafletMapInstance) {
                     centerMapOn(lat, lon, 12);
                 }
-                
                 alert(`✅ Lieu trouvé: ${result.display_name}\nLatitude: ${lat.toFixed(4)}\nLongitude: ${lon.toFixed(4)}`);
             } else {
                 alert('❌ Lieu non trouvé. Essayez avec une adresse plus précise.');

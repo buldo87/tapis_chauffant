@@ -1,0 +1,23 @@
+{
+  "name": "MonProfilCool",
+  "profileType": "saisonnier",
+  "version": "2.0",
+  "isComplete": true,
+  "hysteresis": 0.3,
+  "Kp": 2.0,
+  "Ki": 5.0,
+  "Kd": 1.0,
+  "latitude": 48.85,
+  "longitude": 2.35,
+  "weatherModeEnabled": true,
+  "cameraEnabled": false,
+  "cameraResolution": "qvga",
+  "useLimitTemp": true,
+  "globalMinTempSet": 15.0,
+  "globalMaxTempSet": 35.0,
+  "ledState": true,
+  "ledBrightness": 255,
+  "ledRed": 255,
+  "ledGreen": 255,
+  "ledBlue": 255
+}

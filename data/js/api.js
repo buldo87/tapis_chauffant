@@ -26,8 +26,9 @@ async function fetchLocalData() {
     if (!lat || !lon) {
         throw new Error("Latitude et longitude manquantes dans les paramètres");
     }
+ if (window.debugMode) console.log(`[SEASON] Appel API météo pour latitude=${lat}, longitude=${lon}, années=${years.join(',')}`);
 
-    console.log(`Récupération données météo pour ${lat}, ${lon} à la date ${date}`);
+  if (window.debugMode)    console.log(`Récupération données météo pour ${lat}, ${lon} à la date ${date}`);
 
     const years = [thisYear - 4, thisYear - 3, thisYear - 2, thisYear - 1];
     const tempData = [];
@@ -62,7 +63,7 @@ async function fetchLocalData() {
         const avgTemps = averageArrays(tempData);
         const avgHumidity = humData.length > 0 ? averageArrays(humData) : null;
 
-        console.log("Températures moyennes calculées:", avgTemps);
+        if (window.debugMode) console.log(`[SEASON] Températures moyennes calculées sur ${tempData.length} années:`, avgTemps);
 /*
         // Conversion des températures pour le terrarium
         const processedTemps = avgTemps.map(temp => {
@@ -75,7 +76,9 @@ async function fetchLocalData() {
             // Retourner simplement la température arrondie
             return Math.round(temp * 10) / 10;
         });
-        console.log("Températures traitées pour le terrarium:", processedTemps);
+        
+        if (window.debugMode) console.log(`[SEASON] Températures ajustées (limitées entre ${globalMinTempSet} et ${globalMaxTempSet}):`, processedTemps);
+
 
         return {
             temperatures: processedTemps,

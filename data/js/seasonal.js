@@ -16,7 +16,7 @@ const HEATMAP_CONFIG = {
 function initSeasonalSystem() {
     if (seasonalInitialized) return;
     
-    console.log('🌍 Initialisation du système saisonnier...');
+    if (window.debugMode) console.log('🌍 Initialisation du système saisonnier...');
     
     // Initialiser les événements
     initSeasonalEventListeners();
@@ -28,102 +28,79 @@ function initSeasonalSystem() {
     updateSeasonalVisibility();
     
     seasonalInitialized = true;
-    console.log('✅ Système saisonnier initialisé');
+    if (window.debugMode) console.log('✅ Système saisonnier initialisé');
+    if (window.debugMode) console.log(`[SEASON] Système saisonnier initialisé`);
 }
 
-// Nouvelle fonction pour gérer la visibilité des éléments saisonniers
-function updateSeasonalVisibility() {
-    const seasonalMode = document.getElementById('seasonalMode');
-    const seasonalNavigation = document.getElementById('seasonalNavigation');
-    const heatmapContainer = document.getElementById('seasonalHeatmap');
-    const toolsContainer = document.getElementById('seasonalTools');
-    
-    if (!seasonalMode) return;
-    
-    const isEnabled = seasonalMode.checked;
-    
-    // Afficher/masquer la navigation saisonnière
-    if (seasonalNavigation) {
-        seasonalNavigation.style.display = isEnabled ? 'block' : 'none';
-    }
-    
-    if (heatmapContainer) {
-        heatmapContainer.style.display = isEnabled ? 'block' : 'none';
-    }
-    
-    if (toolsContainer) {
-        toolsContainer.style.display = isEnabled ? 'block' : 'none';
-    }
-    
-    // Si le mode saisonnier est activé
-    if (isEnabled) {
-        // Créer des données de démonstration si nécessaire
-        if (!seasonalData) {
-            createDemoSeasonalData();
-        }
-        
-        // ✅ SÉLECTIONNER AUTOMATIQUEMENT LE JOUR ACTUEL - CORRIGÉ POUR 2025
-        const today = new Date();
-        const startOfYear = new Date(today.getFullYear(), 0, 1);
-        const dayOfYear = Math.floor((today - startOfYear) / (1000 * 60 * 60 * 24));
-        
-        // Sélectionner le jour actuel après un petit délai pour laisser la heatmap se créer
-        setTimeout(() => {
-            selectDay(dayOfYear);
-            console.log(`📅 Jour actuel sélectionné automatiquement: ${dayOfYear + 1} (${today.toLocaleDateString('fr-FR')})`);
-        }, 500);
-    } else {
-        // Réinitialiser la sélection quand le mode est désactivé
-        currentSelectedDay = null;
-    }
-    
-    console.log(`🌍 Mode saisonnier ${isEnabled ? 'activé' : 'désactivé'}`);
-}
 
 // Initialisation des données saisonnières (processus long)
 async function initializeSeasonalData() {
     const initButton = document.getElementById('initSeasonalBtn');
     const progressDiv = document.getElementById('seasonalProgress');
-    
+    const progressBar = document.getElementById('seasonalProgressBar');
+    const progressText = document.getElementById('seasonalProgressText');
+
     if (!initButton || !progressDiv) return;
-    
-    // Vérifier les coordonnées
+
     const lat = document.getElementById('latInput').value;
     const lon = document.getElementById('lonInput').value;
-    
     if (!lat || !lon) {
         alert('⚠️ Veuillez configurer les coordonnées GPS avant d\'initialiser les données saisonnières');
         return;
     }
-    
-    // Confirmation de l'utilisateur
+
     const confirmed = confirm(
         '🌍 Initialisation des données saisonnières\n\n' +
         'Cette opération va télécharger 4 années de données météorologiques historiques.\n' +
         'Cela peut prendre plusieurs minutes.\n\n' +
         'Voulez-vous continuer ?'
     );
-    
     if (!confirmed) return;
-    
+
     try {
-        // Désactiver le bouton et afficher le progrès
         initButton.disabled = true;
         initButton.textContent = '⏳ Initialisation en cours...';
         progressDiv.style.display = 'block';
-        
-        // Simuler le processus d'initialisation pour l'instant
-        await simulateInitialization();
-        
-        // Créer des données de démonstration
-        createDemoSeasonalData();
-        
-        showNotification('✅ Données saisonnières initialisées avec succès !', 'success');
-        
+
+        // Démarrer l'initialisation sur le backend
+        const startResponse = await fetch('/initSeasonalData', { method: 'POST' });
+        if (!startResponse.ok) {
+            throw new Error('Impossible de démarrer l\'initialisation sur le serveur.');
+        }
+
+        // Interroger le statut périodiquement
+        const intervalId = setInterval(async () => {
+            try {
+                const statusResponse = await fetch('/initStatus');
+                const status = await statusResponse.json();
+
+                progressBar.style.width = `${status.progress}%`;
+                progressText.textContent = status.status;
+
+                if (!status.running) {
+                    clearInterval(intervalId);
+                    initButton.disabled = false;
+                    initButton.textContent = '📥 Initialiser les données saisonnières';
+                    progressDiv.style.display = 'none';
+                    if (status.progress === 100) {
+                        showNotification('✅ Données saisonnières initialisées avec succès !', 'success');
+                        // Mettre à jour la heatmap
+                        const averages = await fetch('/getYearlyAverages').then(res => res.json());
+                        seasonalData = averages; // Assigner les données réelles à seasonalData
+                        createHeatmap(seasonalData);
+                    } else {
+                        showNotification('❌ Erreur ou arrêt de l\'initialisation.', 'error');
+                    }
+                }
+            } catch (e) {
+                clearInterval(intervalId);
+                throw e;
+            }
+        }, 2000);
+
     } catch (error) {
         console.error('❌ Erreur lors de l\'initialisation:', error);
         showNotification('❌ Erreur lors de l\'initialisation: ' + error.message, 'error');
-    } finally {
         initButton.disabled = false;
         initButton.textContent = '📥 Initialiser les données saisonnières';
         progressDiv.style.display = 'none';
@@ -186,6 +163,7 @@ function createDemoSeasonalData() {
         createHeatmap(seasonalData);
         document.getElementById('seasonalHeatmap').style.display = 'block';
     }
+    if (window.debugMode) console.log(`⚠️⚠️⚠️[SEASON] create DEMO Seasonal Data initialisé`);
 }
 
 // Création de la heatmap calendaire - Largeur complète avec tooltip corrigé
@@ -240,6 +218,7 @@ function createHeatmap(data) {
     canvas.addEventListener('mouseleave', hideTooltip);
     
     container.appendChild(canvas);
+    if (window.debugMode) console.log(`[SEASON] Création heatmap avec ${Array.isArray(seasonalData) ? seasonalData.length : 0} jours`);
 }
 
 // ✅ TOOLTIP ENTIÈREMENT CORRIGÉ - Affichage du tooltip amélioré avec date 2025
@@ -383,7 +362,12 @@ function drawYearlyHeatmap(ctx, data, width, height) {
         const y = startY + weekday * (cellSize + cellPadding);
         
         // Couleur basée sur la température
-        const intensity = (avgTemp - minTemp) / (maxTemp - minTemp);
+        let intensity;
+        if (maxTemp - minTemp === 0) {
+            intensity = 0.5; // Toutes les températures sont identiques, utiliser une couleur médiane
+        } else {
+            intensity = (avgTemp - minTemp) / (maxTemp - minTemp);
+        }
         const color = getTemperatureColor(intensity);
         
         ctx.fillStyle = color;
@@ -518,7 +502,9 @@ function getDayFromCoordinates(x, y, canvasWidth, canvasHeight) {
 }
 
 // Sélection d'un jour pour édition
+// ✅ CORRECTION : Supprimer complètement les appels serveur
 async function selectDay(dayIndex) {
+    if (window.debugMode) console.log(`[DEBUG] Sélection du jour: ${dayIndex}`);
     currentSelectedDay = dayIndex;
     
     // Mettre à jour la heatmap pour montrer la sélection
@@ -526,12 +512,122 @@ async function selectDay(dayIndex) {
         createHeatmap(seasonalData);
     }
     
-    // Charger les données du jour sélectionné
-    await loadDayData(dayIndex);
+    // ✅ UTILISER UNIQUEMENT LES DONNÉES LOCALES
+    let dayTemperatures;
+    
+    // S'assurer que seasonalData existe et est correctement initialisé
+    if (!seasonalData || !Array.isArray(seasonalData) || seasonalData.length !== 366) {
+        console.warn("[SEASON] Données saisonnières manquantes, génération...");
+        createDemoSeasonalData();
+    }
+    
+    // Récupérer ou générer les données pour ce jour
+    if (seasonalData[dayIndex] && Array.isArray(seasonalData[dayIndex]) && seasonalData[dayIndex].length === 24) {
+        dayTemperatures = [...seasonalData[dayIndex]];
+        if (window.debugMode) console.log(`[SEASON] Données locales utilisées pour le jour ${dayIndex}`);
+    } else {
+        // Générer et sauvegarder
+        dayTemperatures = generateDefaultDayData(dayIndex);
+        seasonalData[dayIndex] = [...dayTemperatures];
+        if (window.debugMode) console.log(`[SEASON] Données générées pour le jour ${dayIndex}`);
+    }
+
+    // Mettre à jour l'éditeur de courbe
+    if (typeof window.temperatureData !== 'undefined') {
+        window.temperatureData = [...dayTemperatures];
+        if (typeof window.updateChartAndGrid === 'function') {
+            window.updateChartAndGrid();
+        }
+    }
     
     // Afficher les contrôles de navigation
     showDayNavigationControls(dayIndex);
+    if (window.debugMode) {
+        const date = new Date(new Date().getFullYear(), 0, dayIndex + 1);
+        console.log(`[SEASON] Jour sélectionné : ${dayIndex} (${date.toLocaleDateString()})`);
+    }
 }
+
+// ✅ CORRECTION : Éviter les appels multiples
+function updateSeasonalVisibility() {
+    const seasonalMode = document.getElementById('seasonalMode');
+    const seasonalNavigation = document.getElementById('seasonalNavigation');
+    const heatmapContainer = document.getElementById('seasonalHeatmap');
+    const toolsContainer = document.getElementById('seasonalTools');
+    
+    if (!seasonalMode) return;
+    
+    const isEnabled = seasonalMode.checked;
+
+    // Afficher/masquer les éléments
+    if (seasonalNavigation) seasonalNavigation.style.display = isEnabled ? 'block' : 'none';
+    if (heatmapContainer) heatmapContainer.style.display = isEnabled ? 'block' : 'none';
+    if (toolsContainer) toolsContainer.style.display = isEnabled ? 'block' : 'none';
+
+    if (isEnabled) {
+        // Initialiser les données si nécessaire
+        if (!seasonalData || !Array.isArray(seasonalData) || seasonalData.length !== 366) {
+            if (window.debugMode) console.warn("[SEASON] Initialisation des données de démonstration");
+            createDemoSeasonalData();
+        }
+
+        // Sélection automatique UNIQUE du jour actuel
+        if (currentSelectedDay === null) {
+            const today = new Date();
+            const startOfYear = new Date(today.getFullYear(), 0, 1);
+            const dayOfYear = Math.floor((today - startOfYear) / (1000 * 60 * 60 * 24));
+            
+            // Utiliser requestAnimationFrame pour éviter les appels multiples
+            requestAnimationFrame(() => {
+                if (seasonalMode.checked && currentSelectedDay === null) {
+                    selectDay(Math.min(dayOfYear, 365)); // S'assurer que l'index est valide
+                }
+            });
+        }
+    } else {
+        currentSelectedDay = null;
+    }
+
+    if (window.debugMode) console.log(`🌍 Mode saisonnier ${isEnabled ? 'activé' : 'désactivé'}`);
+}
+
+// ✅ CORRECTION : Améliorer la génération de données par défaut
+function generateDefaultDayData(dayIndex) {
+    const dayTemps = [];
+    
+    // Variation saisonnière plus réaliste
+    const seasonalBase = 22 + 8 * Math.sin((dayIndex / 366) * 2 * Math.PI - Math.PI/2);
+    
+    for (let hour = 0; hour < 24; hour++) {
+        // Variation journalière plus prononcée
+        let dailyVariation = 0;
+        if (hour >= 6 && hour <= 8) {
+            // Lever du soleil
+            dailyVariation = -2 + (hour - 6) * 1.5;
+        } else if (hour > 8 && hour <= 14) {
+            // Montée vers midi
+            dailyVariation = 1 + (hour - 8) * 0.5;
+        } else if (hour > 14 && hour <= 18) {
+            // Après-midi
+            dailyVariation = 4 - (hour - 14) * 0.5;
+        } else if (hour > 18 && hour <= 22) {
+            // Soirée
+            dailyVariation = 2 - (hour - 18) * 0.75;
+        } else {
+            // Nuit
+            dailyVariation = -1;
+        }
+        
+        // Petit bruit aléatoire
+        const noise = (Math.random() - 0.5) * 0.5;
+        
+        const temp = Math.max(15, Math.min(35, seasonalBase + dailyVariation + noise));
+        dayTemps.push(Math.round(temp * 10) / 10);
+    }
+    
+    return dayTemps;
+}
+
 
 // Chargement des données d'un jour spécifique
 async function loadDayData(dayIndex) {
@@ -609,10 +705,29 @@ async function saveDayModifications() {
         if (temperatures.length !== 24) {
             throw new Error('Données de température invalides');
         }
-        
-        // Mettre à jour les données locales
+
+        // Mise à jour locale des données saisonnières
         if (seasonalData && seasonalData[currentSelectedDay]) {
             seasonalData[currentSelectedDay] = [...temperatures];
+        }
+
+        // Sauvegarder le profil complet si un profil est actuellement chargé
+        if (currentProfileName) {
+            const profile = {
+                name: currentProfileName,
+                seasonalData: seasonalData,
+                // ... autres données du profil
+            };
+
+            const response = await fetch('/saveProfile', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(profile)
+            });
+
+            if (!response.ok) {
+                throw new Error("La sauvegarde sur le serveur a échoué");
+            }
         }
         
         // Recréer la heatmap
@@ -620,7 +735,10 @@ async function saveDayModifications() {
         
         // Afficher la confirmation
         showNotification('✅ Modifications sauvegardées pour ce jour', 'success');
-        
+        if (window.debugMode) {
+            console.log(`[SEASON] Sauvegarde du jour ${currentSelectedDay}`, temperatures);
+        }
+
     } catch (error) {
         console.error('❌ Erreur lors de la sauvegarde:', error);
         showNotification('❌ Erreur lors de la sauvegarde: ' + error.message, 'error');

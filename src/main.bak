@@ -1,0 +1,3379 @@
+#include "wifi_credentials.h"
+#include "WiFi.h"
+#include "ESPAsyncWebServer.h"
+#include <Preferences.h>
+#include <time.h>
+#include <PID_v1.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <ArduinoJson.h>
+#include <Wire.h>
+#include <Adafruit_SHT31.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <Adafruit_NeoPixel.h>
+#include "esp_camera.h"
+#include "logo.h"
+#include "LittleFS.h"
+#include "esp_task_wdt.h"
+#include "esp_mac.h"
+#include <math.h>
+
+#define PWDN_GPIO_NUM -1
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM 15
+#define SIOD_GPIO_NUM 4
+#define SIOC_GPIO_NUM 5
+#define Y2_GPIO_NUM 11
+#define Y3_GPIO_NUM 9
+#define Y4_GPIO_NUM 8
+#define Y5_GPIO_NUM 10
+#define Y6_GPIO_NUM 12
+#define Y7_GPIO_NUM 18
+#define Y8_GPIO_NUM 17
+#define Y9_GPIO_NUM 16
+#define VSYNC_GPIO_NUM 6
+#define HREF_GPIO_NUM 7
+#define PCLK_GPIO_NUM 13
+
+// Configuration NeoPixel
+#define PIN 48
+#define NUMPIXELS 1
+
+// Définition des broches I2C pour l'écran SSD1306
+#define I2C_SDA 1
+#define I2C_SCL 2
+
+// Configuration de l'écran SSD1306
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_ADDR 0x3C
+
+// === Tapis Chauffant ===
+#define HEATER_PIN 42
+// === Courbe de température ===
+const int TEMP_CURVE_POINTS = 24;  // Un point par heure
+
+
+
+// === STRUCTURE DE CONFIGURATION UNIFIÉE ===
+struct SystemConfig {
+    // Paramètres de contrôle (bools/strings inchangés)
+    bool usePWM = false;
+    bool weatherModeEnabled = false;
+    String currentProfileName = "default";
+    bool cameraEnabled = false;
+    String cameraResolution = "qvga";
+    bool useTempCurve = false;
+    bool useLimitTemp = true;
+    
+    // ❌ GARDER en float - Précision PID critique
+    float hysteresis = 0.3;
+    float Kp = 2.0, Ki = 5.0, Kd = 1.0;
+    
+    // ✅ CONVERTIR - Setpoint en int16
+    int16_t setpoint = 230;  // 23.0°C → 230
+    
+    // ❌ GARDER en float - Précision GPS importante  
+    float latitude = 48.85;
+    float longitude = 2.35;
+    int DST_offset = 2;  // Déjà int
+    
+    // ✅ CONVERTIR - Limites en int16
+    int16_t globalMinTempSet = 150;  // 15.0°C → 150
+    int16_t globalMaxTempSet = 350;  // 35.0°C → 350
+    
+    // ✅ DÉJÀ CONVERTI - Courbe en int16
+    int16_t tempCurve[TEMP_CURVE_POINTS];
+    
+    // LED/métadonnées (inchangés)
+    bool ledState = false;
+    int ledBrightness = 255;
+    int ledRed = 255, ledGreen = 255, ledBlue = 255;
+    uint32_t configVersion = 1;
+    uint32_t configHash = 0;
+    char lastSaveTime[20] = "never";
+    bool seasonalModeEnabled = false;
+    bool debugModeEnabled = true;
+    
+    // ✅ CONSTRUCTEUR avec conversions
+    SystemConfig() {
+        // Courbe par défaut
+        for (int i = 0; i < TEMP_CURVE_POINTS; i++) {
+            float tempFloat = 22.2 + (i >= 8 && i <= 20 ? 3.0 : 0.0);
+            tempCurve[i] = (int16_t)(tempFloat * 10);
+        }
+        
+        // Limites par défaut déjà définies
+        // setpoint par défaut déjà défini
+    }
+    
+    // ✅ FONCTIONS UTILITAIRES
+    inline double getSetpointDouble() const { return setpoint / 10.0; }
+    inline float getSetpointFloat() const { return setpoint / 10.0f; }
+    inline void setSetpointValue(double temp) { setpoint = (int16_t)(temp * 10); }
+    
+    inline float getMinTempFloat() const { return globalMinTempSet / 10.0f; }
+    inline float getMaxTempFloat() const { return globalMaxTempSet / 10.0f; }
+    inline void setMinTemp(float temp) { globalMinTempSet = (int16_t)(temp * 10); }
+    inline void setMaxTemp(float temp) { globalMaxTempSet = (int16_t)(temp * 10); }
+    
+    inline float getTempCurve(int hour) const { 
+        return (hour >= 0 && hour < TEMP_CURVE_POINTS) ? tempCurve[hour] / 10.0f : 22.0f; 
+    }
+    inline void setTempCurve(int hour, float temp) {
+        if (hour >= 0 && hour < TEMP_CURVE_POINTS) {
+            tempCurve[hour] = (int16_t)(temp * 10);
+        }
+    }
+};
+SystemConfig config;
+// safe mode
+enum SafetyLevel {
+    SAFETY_NORMAL = 0,
+    SAFETY_WARNING = 1,
+    SAFETY_CRITICAL = 2,
+    SAFETY_EMERGENCY = 3
+};
+
+struct SafetySystem {
+    SafetyLevel currentLevel = SAFETY_NORMAL;
+    unsigned long lastSensorRead = 0;
+    unsigned long lastValidTemperature = 0;
+    unsigned long lastValidHumidity = 0;
+    unsigned long safetyActivatedTime = 0;
+    int consecutiveFailures = 0;
+    int temperatureOutOfRangeCount = 0;
+    int humidityOutOfRangeCount = 0;
+    bool emergencyShutdown = false;
+    String lastErrorMessage = "";
+    float lastKnownGoodTemp = 22.0;
+    float lastKnownGoodHum = 50.0;
+};
+SafetySystem safety;
+String currentProfileName = "default";
+struct ExternalWeather {
+  float temperature;
+  float humidity;
+};
+
+struct HistoryRecord {
+  time_t timestamp;
+  float temperature;
+  float humidity;
+};
+
+// Variables pour l'initialisation saisonnière
+TaskHandle_t seasonalInitTaskHandle = NULL;
+volatile int seasonalInitProgress = 0;
+volatile bool seasonalInitRunning = false;
+String seasonalInitStatus = "Idle";
+
+// === Variables globales ===
+// Capteurs et état système
+float internalTemp = NAN;
+float internalHum = NAN;
+float externalTemp = 0.0;
+float externalHum = 0.0;
+bool heaterState = false;
+float lastTemperature = 0.0;
+double input, output;
+const long gmtOffset_sec = 3600;
+const int daylightOffset_sec = 0;
+const float MAX_TEMP_VARIATION = 5.0;
+const float MAX_HUMIDITY_VARIATION = 10.0;
+float lastDisplayedTemp = -100.0;
+float lastDisplayedHum = -100.0;
+int lastDisplayedPage = -1;
+bool forceDisplayUpdate = true; // Pour forcer le premier affichage
+
+// Fenêtres glissantes pour moyennes
+const int windowSize = 1000;
+float temperatureWindow[windowSize];
+float humiditeWindow[windowSize];
+int windowIndex = 0;
+bool windowFilled = false;
+
+// Statistiques
+float maxTemperature = -INFINITY;
+float minTemperature = INFINITY;
+float maxHumidite = -INFINITY;
+float minHumidite = INFINITY;
+
+// Temporisation et cycles
+unsigned long lastToggleTime = 0;
+bool manualCycleOn = false;
+
+// Sauvegarde optimisée
+unsigned long lastSaveRequest = 0;
+const unsigned long saveDelay = 5000;
+bool savePending = false;
+
+// === Historique circulaire ===
+const int MAX_HISTORY_RECORDS = 1440;
+// Historique 
+HistoryRecord history[MAX_HISTORY_RECORDS];
+int historyIndex = 0;
+bool historyFull = false;
+
+// Affichage OLED
+unsigned long lastDisplayChange = 0;
+int displayPage = 0;
+const int pageCount = 4;
+
+// Météo
+unsigned long lastWeatherUpdate = 0;
+const unsigned long weatherInterval = 3600000;
+
+// Objets matériels (inchangés)
+AsyncWebServer server(80);
+Preferences preferences;
+PID myPID(&input, &output, &config.setpoint, config.Kp, config.Ki, config.Kd, DIRECT);
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+Adafruit_SHT31 sht31 = Adafruit_SHT31();
+Adafruit_NeoPixel pixels(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
+TaskHandle_t Core1TaskHandle;
+SemaphoreHandle_t i2cMutex = NULL;
+
+// Seuils de sécurité
+const float TEMP_EMERGENCY_HIGH = 40.0;    // Température critique haute
+const float TEMP_EMERGENCY_LOW = 10.0;     // Température critique basse
+const float TEMP_WARNING_HIGH = 35.0;      // Température d'alerte haute
+const float TEMP_WARNING_LOW = 15.0;       // Température d'alerte basse
+const float HUM_EMERGENCY_HIGH = 95.0;     // Humidité critique haute
+const float HUM_EMERGENCY_LOW = 10.0;      // Humidité critique basse
+const unsigned long SENSOR_TIMEOUT = 30000; // 30 secondes sans lecture
+const unsigned long SAFETY_RESET_DELAY = 300000; // 5 minutes avant tentative de reset
+const int MAX_CONSECUTIVE_FAILURES = 3;    // Nombre d'échecs consécutifs
+
+// logo
+int16_t positionImageAxeHorizontal = 20;     // Position de la gauche de l’image à 20 pixels du bord gauche de l’écran
+int16_t positionImageAxeVertical = 0;       // Position du haut de l’image à 16 pixels du bord haut de l’écran OLED
+int16_t largeurDeLimage = 64;                // Largeur de l’image à afficher : 64 pixels
+int16_t hauteurDeLimage = 64;                // Hauteur de l’image à afficher : 64 pixels
+// === DEBUG MACRO ===
+#define DEBUG_LOG(fmt, ...) \
+    do { \
+        if (config.debugModeEnabled) { \
+            Serial.printf("[DEBUG] " fmt "\n", ##__VA_ARGS__); \
+        } \
+    } while (0)
+
+// === SERVEUR MJPEG OPTIMISÉ ===
+class MJPEGStreamer {
+private:
+    static camera_fb_t* getOptimizedFrame() {
+        camera_fb_t *fb = esp_camera_fb_get();
+        if (!fb) {
+            Serial.println("❌ Échec capture MJPEG frame");
+            return nullptr;
+        }
+        
+        // Vérifier que c'est bien du JPEG
+        if (fb->format != PIXFORMAT_JPEG) {
+            Serial.println("⚠️ Format non-JPEG détecté");
+            esp_camera_fb_return(fb);
+            return nullptr;
+        }
+        
+        return fb;
+    }
+
+public:
+    static void streamMJPEG(AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginChunkedResponse(
+            "multipart/x-mixed-replace; boundary=--123456789000000000000987654321",
+            [](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
+                static camera_fb_t *fb = nullptr;
+                static size_t sent = 0;
+                static bool headerSent = false;
+                static String frameHeader;
+                
+                // Nouvelle frame
+                if (index == 0 || (!fb && sent == 0)) {
+                    if (fb) {
+                        esp_camera_fb_return(fb);
+                        fb = nullptr;
+                    }
+                    
+                    fb = getOptimizedFrame();
+                    if (!fb) return 0;
+                    
+                    sent = 0;
+                    headerSent = false;
+                    
+                    // Préparer l'en-tête MJPEG
+                    frameHeader = "\r\n--123456789000000000000987654321\r\n";
+                    frameHeader += "Content-Type: image/jpeg\r\n";
+                    frameHeader += "Content-Length: " + String(fb->len) + "\r\n\r\n";
+                }
+                
+                if (!fb) return 0;
+                
+                // Envoyer l'en-tête en premier
+                if (!headerSent) {
+                    size_t headerLen = min((size_t)frameHeader.length(), maxLen);
+                    memcpy(buffer, frameHeader.c_str(), headerLen);
+                    headerSent = (headerLen == frameHeader.length());
+                    return headerLen;
+                }
+                
+                // Envoyer les données JPEG
+                if (sent < fb->len) {
+                    size_t toSend = min(maxLen, fb->len - sent);
+                    memcpy(buffer, fb->buf + sent, toSend);
+                    sent += toSend;
+                    
+                    // Frame terminée ?
+                    if (sent >= fb->len) {
+                        esp_camera_fb_return(fb);
+                        fb = nullptr;
+                        sent = 0;
+                    }
+                    
+                    return toSend;
+                }
+                
+                return 0;
+            }
+        );
+
+        // En-têtes spécifiques MJPEG
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        response->addHeader("Pragma", "no-cache");
+        response->addHeader("Expires", "0");
+        response->addHeader("Connection", "close");
+        
+        request->send(response);
+    }
+};
+
+// === OPTIMISATION SAUVEGARDE ===
+// === FONCTIONS DE CONFIGURATION SIMPLIFIÉES ===
+uint32_t calculateConfigHash() {
+    uint32_t hash = 0;
+    uint8_t* data = (uint8_t*)&config;
+    size_t dataSize = sizeof(config) - sizeof(config.lastSaveTime) - sizeof(config.configHash);
+    
+    for (size_t i = 0; i < dataSize; i++) {
+        hash = hash * 31 + data[i];
+    }
+    return hash;
+}
+
+void saveConfigIfChanged() {
+    uint32_t currentHash = calculateConfigHash();
+    
+    if (currentHash == config.configHash) {
+        Serial.println("🟡 Aucune modification, sauvegarde ignorée.");
+        return;
+    }
+    
+    preferences.begin("system", false);
+    size_t written = preferences.putBytes("config", &config, sizeof(config));
+    
+    if (written == sizeof(config)) {
+        struct tm timeinfo;
+        if (getLocalTime(&timeinfo)) {
+            strftime(config.lastSaveTime, sizeof(config.lastSaveTime), "%d-%m-%Y %H:%M:%S", &timeinfo);
+            preferences.putString("lastSave", config.lastSaveTime);
+        }
+        
+        config.configHash = currentHash;
+        Serial.printf("💾 Config sauvegardée (%zu octets) à %s\n", written, config.lastSaveTime);
+    } else {
+        Serial.println("❌ Échec de la sauvegarde");
+    }
+    // ✅ Sauvegarder le nom du profil séparément
+    preferences.putString("currentProfile", config.currentProfileName);
+    preferences.end();
+}
+
+void requestConfigSave() {
+    lastSaveRequest = millis();
+    savePending = true;
+}
+
+void loadCompleteConfig() {
+    preferences.begin("system", true);
+    size_t configSize = preferences.getBytesLength("config");
+    
+    if (configSize == sizeof(config)) {
+        preferences.getBytes("config", &config, sizeof(config));
+        Serial.println("✅ Configuration restaurée depuis la mémoire");
+    } else {
+        Serial.println("⚠️ Aucune configuration trouvée, utilisation des valeurs par défaut");
+        // Le constructeur SystemConfig() a déjà initialisé tempCurve
+    }
+    // ✅ Charger le nom du profil
+    config.currentProfileName = preferences.getString("currentProfile", "default");
+    String lastSave = preferences.getString("lastSave", "jamais");
+    preferences.end();
+    
+    // Mise à jour du PID avec les valeurs chargées
+    myPID.SetTunings(config.Kp, config.Ki, config.Kd);
+    
+    Serial.printf("📅 Dernière sauvegarde: %s\n", lastSave.c_str());
+}
+
+// === FONCTIONS DE SÉCURITÉ  ===
+void activateWarningMode(const String& reason) {
+    Serial.println("⚠️ MODE ALERTE ACTIVÉ: " + reason);
+    
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.println("ALERTE! ");
+    display.setCursor(0, 12);
+    display.println(reason.substring(0, 21));
+    display.setCursor(0, 24);
+    display.printf("Temp: %.1fC", safety.lastKnownGoodTemp);
+    display.setCursor(0, 36);
+    display.printf("Hum: %.0f%%", safety.lastKnownGoodHum);
+    display.setCursor(0, 48);
+    display.println("Surveillance++");
+    display.display();
+    
+    if (output > 128) {
+        output = 128;
+        analogWrite(HEATER_PIN, output);
+    }
+}
+
+void activateCriticalMode(const String& reason) {
+    Serial.println("🔴 MODE CRITIQUE ACTIVÉ: " + reason);
+    
+    output = 0;
+    analogWrite(HEATER_PIN, 0);
+    
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.println("MODE CRITIQUE");
+    display.drawLine(0, 10, display.width(), 10, SSD1306_WHITE);
+    display.setCursor(0, 15);
+    display.println("Chauffage OFF");
+    display.setCursor(0, 27);
+    display.println(reason.substring(0, 21));
+    display.setCursor(0, 39);
+    display.println("Verification...");
+    display.setCursor(0, 51);
+    display.printf("T:%.1f H:%.0f%%", safety.lastKnownGoodTemp, safety.lastKnownGoodHum);
+    display.display();
+    
+    internalTemp = safety.lastKnownGoodTemp;
+    internalHum = safety.lastKnownGoodHum;
+}
+
+void activateEmergencyMode(const String& reason) {
+    Serial.println("🚨 MODE URGENCE ACTIVÉ: " + reason);
+    
+    safety.emergencyShutdown = true;
+    output = 0;
+    analogWrite(HEATER_PIN, 0);
+    
+    static bool blinkState = false;
+    blinkState = !blinkState;
+    
+    display.clearDisplay();
+    if (blinkState) {
+        display.fillScreen(SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
+    } else {
+        display.setTextColor(SSD1306_WHITE);
+    }
+    
+    display.setTextSize(2);
+    display.setCursor(0, 0);
+    display.println("URGENCE! ");
+    display.setTextSize(1);
+    display.setCursor(0, 20);
+    display.println("ARRET COMPLET");
+    display.setCursor(0, 32);
+    display.println(reason.substring(0, 21));
+    display.setCursor(0, 44);
+    display.println("Verif. capteurs");
+    display.display();
+}
+
+void escalateSafety(SafetyLevel newLevel, const String& reason) {
+    unsigned long now = millis();
+    
+    if (newLevel > safety.currentLevel) {
+        safety.currentLevel = newLevel;
+        safety.safetyActivatedTime = now;
+        safety.lastErrorMessage = reason;
+        
+        Serial.printf("🚨 SÉCURITÉ NIVEAU %d: %s\n", newLevel, reason.c_str());
+        
+        switch (newLevel) {
+            case SAFETY_WARNING:
+                activateWarningMode(reason);
+                break;
+            case SAFETY_CRITICAL:
+                activateCriticalMode(reason);
+                break;
+            case SAFETY_EMERGENCY:
+                activateEmergencyMode(reason);
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+void exitSafeMode() {
+    Serial.println("✅ RETOUR AU MODE NORMAL");
+    
+    safety.emergencyShutdown = false;
+    safety.consecutiveFailures = 0;
+    safety.temperatureOutOfRangeCount = 0;
+    safety.humidityOutOfRangeCount = 0;
+    safety.lastErrorMessage = "";
+    
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.println("SYSTEME OK");
+    display.setCursor(0, 15);
+    display.println("Reprise normale");
+    display.setCursor(0, 30);
+    display.printf("Temp: %.1fC", internalTemp);
+    display.setCursor(0, 45);
+    display.printf("Hum: %.0f%%", internalHum);
+    display.display();
+    delay(2000);
+}
+
+void downgradeSafety() {
+    SafetyLevel oldLevel = safety.currentLevel;
+    
+    if (safety.currentLevel > SAFETY_NORMAL) {
+        safety.currentLevel = (SafetyLevel)(safety.currentLevel - 1);
+        Serial.printf("✅ SÉCURITÉ: Niveau réduit de %d à %d\n", oldLevel, safety.currentLevel);
+        
+        if (safety.currentLevel == SAFETY_NORMAL) {
+            exitSafeMode();
+        }
+    }
+}
+
+void checkSafetyConditions() {
+    unsigned long now = millis();
+    
+    if (now - safety.lastSensorRead > SENSOR_TIMEOUT) {
+        escalateSafety(SAFETY_CRITICAL, "Capteurs non réactifs depuis " + String((now - safety.lastSensorRead)/1000) + "s");
+        return;
+    }
+    
+    if (!isnan(internalTemp)) {
+        safety.lastValidTemperature = now;
+        safety.lastKnownGoodTemp = internalTemp;
+        
+        if (internalTemp >= TEMP_EMERGENCY_HIGH || internalTemp <= TEMP_EMERGENCY_LOW) {
+            escalateSafety(SAFETY_EMERGENCY, "Température critique: " + String(internalTemp) + "°C");
+            return;
+        } else if (internalTemp >= TEMP_WARNING_HIGH || internalTemp <= TEMP_WARNING_LOW) {
+            escalateSafety(SAFETY_WARNING, "Température d'alerte: " + String(internalTemp) + "°C");
+        } else {
+            safety.temperatureOutOfRangeCount = 0;
+        }
+    } else {
+        safety.consecutiveFailures++;
+        if (safety.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            escalateSafety(SAFETY_CRITICAL, "Échecs consécutifs de lecture température: " + String(safety.consecutiveFailures));
+            return;
+        }
+    }
+    
+    if (!isnan(internalHum)) {
+        safety.lastValidHumidity = now;
+        safety.lastKnownGoodHum = internalHum;
+        
+        if (internalHum >= HUM_EMERGENCY_HIGH || internalHum <= HUM_EMERGENCY_LOW) {
+            escalateSafety(SAFETY_WARNING, "Humidité critique: " + String(internalHum) + "%");
+        }
+    }
+    
+    if (abs(internalTemp - safety.lastKnownGoodTemp) > 10.0) {
+        safety.temperatureOutOfRangeCount++;
+        if (safety.temperatureOutOfRangeCount >= 3) {
+            escalateSafety(SAFETY_WARNING, "Variation température suspecte: " + String(internalTemp) + "°C vs " + String(safety.lastKnownGoodTemp) + "°C");
+        }
+    }
+    
+    if (output > 200 && internalTemp > config.setpoint + 2.0) {
+        escalateSafety(SAFETY_WARNING, "Chauffage actif mais température élevée");
+    }
+    
+    if (safety.currentLevel > SAFETY_NORMAL && now - safety.safetyActivatedTime > SAFETY_RESET_DELAY) {
+        if (internalTemp > TEMP_WARNING_LOW && internalTemp < TEMP_WARNING_HIGH && 
+            internalHum > HUM_EMERGENCY_LOW && internalHum < HUM_EMERGENCY_HIGH) {
+            downgradeSafety();
+        }
+    }
+}
+
+// === FONCTIONS MÉTÉO Local ===
+ExternalWeather getWeatherData() {
+    ExternalWeather result = {NAN, NAN};
+    
+    HTTPClient http;
+    String url = "https://api.open-meteo.com/v1/forecast?latitude=" + String(config.latitude, 4) + 
+                "&longitude=" + String(config.longitude, 4) + 
+                "&current_weather=true&hourly=relative_humidity_2m";
+    
+    http.begin(url);
+    int httpCode = http.GET();
+    if (httpCode != 200) {
+        Serial.printf("❌ Erreur API météo (%d) \n", httpCode);
+        http.end();
+        return result;
+    }
+    
+    String payload = http.getString();
+    http.end();
+    
+    DynamicJsonDocument doc(16384);
+    DeserializationError error = deserializeJson(doc, payload);
+    if (error) {
+        Serial.print("❌ Erreur JSON météo : \n");
+        Serial.println(error.c_str());
+        return result;
+    }
+    
+    result.temperature = doc["current_weather"]["temperature"] | NAN;
+    
+    String nowStr = doc["current_weather"]["time"];
+    String targetHour = nowStr.substring(0, 14) + "00";
+    
+    JsonArray timeArr = doc["hourly"]["time"];
+    JsonArray humArr = doc["hourly"]["relative_humidity_2m"];
+    
+    for (size_t i = 0; i < timeArr.size(); i++) {
+        if (timeArr[i].as<String>() == targetHour) {
+            result.humidity = humArr[i].as<float>();
+            break;
+        }
+    }
+    
+    return result;
+}
+
+// === FONCTIONS HISTORIQUE ===
+void addToHistory(float temperature, float humidity) {
+    time_t now = time(nullptr);
+    history[historyIndex] = { now, temperature, humidity };
+    historyIndex = (historyIndex + 1) % MAX_HISTORY_RECORDS;
+    if (historyIndex == 0) historyFull = true;
+}
+
+float getCurrentTargetTemperature() {
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) {
+        return 23.0; // Fallback
+    }
+
+    if (config.seasonalModeEnabled) {
+        int dayOfYear = timeinfo.tm_yday;
+        int hour = timeinfo.tm_hour;
+        
+        String schedulePath = "/profiles/" + currentProfileName + "/temperature.bin";
+        if (!LittleFS.exists(schedulePath)) {
+            DEBUG_LOG("Mode saisonnier actif, mais temperature.bin introuvable pour le profil '%s'. Utilisation de la courbe journalière.", currentProfileName.c_str());
+            return config.tempCurve[hour];
+        }
+
+        File file = LittleFS.open(schedulePath, "r");
+        if (!file) {
+            DEBUG_LOG("Échec d'ouverture de temperature.bin pour le profil '%s'.", currentProfileName.c_str());
+            return config.tempCurve[hour];
+        }
+
+        size_t seekPos = (dayOfYear * 24 + hour) * sizeof(int16_t);
+        if (file.seek(seekPos)) {
+            int16_t tempInt;
+            if (file.read((uint8_t*)&tempInt, sizeof(int16_t)) == sizeof(int16_t)) {
+                file.close();
+                float tempFloat = tempInt / 10.0f;
+                //DEBUG_LOG("Mode saisonnier: profil %s, jour %d, heure %d, consigne=%.1f°C", currentProfileName.c_str(), dayOfYear, hour, tempFloat);
+                return tempFloat;
+            }
+        }
+        
+        file.close();
+        DEBUG_LOG("Échec de lecture de la consigne pour le jour %d, heure %d. Utilisation de la courbe journalière.", dayOfYear, hour);
+        return config.tempCurve[hour];
+
+    } else {
+        // Mode courbe journalière standard
+        return config.tempCurve[timeinfo.tm_hour];
+    }
+}
+
+// === CONTRÔLE CHAUFFAGE ===
+void controlHeater(float currentTemperature) {
+    if (safety.emergencyShutdown || safety.currentLevel >= SAFETY_CRITICAL) {
+        output = 0;
+        analogWrite(HEATER_PIN, 0);
+        Serial.println("🚨 Chauffage bloqué par le système de sécurité");
+        return;
+    }
+
+    config.setpoint = getCurrentTargetTemperature();
+
+    if (safety.currentLevel == SAFETY_WARNING) {
+        output = min(output, 128.0);
+    }
+
+    float currentMaxTemp = config.setpoint;
+    float currentMinTemp = config.setpoint - config.hysteresis;
+    unsigned long now = millis();
+
+    if (currentTemperature >= currentMaxTemp) {
+        output = 0;
+        manualCycleOn = false;
+    } else if (currentTemperature < currentMinTemp) {
+        output = 255;
+        manualCycleOn = false;
+    } else {
+        if (config.usePWM) {
+            input = currentTemperature;
+            myPID.Compute();
+            output = constrain(output, 0, 255);
+        } else {
+            if (manualCycleOn && now - lastToggleTime >= 990) {
+                manualCycleOn = false;
+                lastToggleTime = now;
+            } else if (!manualCycleOn && now - lastToggleTime >= 2990) {
+                manualCycleOn = true;
+                lastToggleTime = now;
+            }
+            output = manualCycleOn ? 255 : 0;
+        }
+    }
+
+    analogWrite(HEATER_PIN, output);
+}
+
+// === CAPTEURS ===
+// === FONCTIONS I2C SÉCURISÉES ===
+bool readSensorWithPriority(float &temperature, float &humidity, int maxRetries = 3) {
+    // Tentative d'acquisition du mutex avec timeout
+    if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        DEBUG_LOG("⚠️ Timeout acquisition mutex I2C pour capteur");
+        return false;
+    }
+    
+    bool success = false;
+    for (int attempt = 0; attempt < maxRetries && !success; attempt++) {
+        if (attempt > 0) {
+            DEBUG_LOG("Tentative %d/%d de lecture capteur", attempt + 1, maxRetries);
+            vTaskDelay(pdMS_TO_TICKS(50)); // Pause entre tentatives
+        }
+        
+        temperature = sht31.readTemperature();
+        humidity = sht31.readHumidity();
+        
+        if (!isnan(temperature) && !isnan(humidity)) {
+            success = true;
+           // DEBUG_LOG("✅ Lecture capteur réussie : %.1f°C, %.0f%%", temperature, humidity);
+        } else {
+            DEBUG_LOG("❌ Échec lecture capteur (tentative %d)", attempt + 1);
+        }
+    }
+    
+    // Libération du mutex
+    xSemaphoreGive(i2cMutex);
+    return success;
+}
+// === AFFICHAGE OLED ===
+bool updateDisplaySafe(bool force = false) {
+    // Pour l'affichage, timeout plus court et abandon plus facile
+    if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(20)) != pdTRUE) {
+        if (force) {
+            DEBUG_LOG("⚠️ Forçage mise à jour écran malgré mutex occupé");
+            return false;
+        }
+        // Abandon silencieux si le bus est occupé
+        return false;
+    }
+    
+    // Mise à jour de l'écran
+    display.display();
+    
+    xSemaphoreGive(i2cMutex);
+    return true;
+}
+
+void renderOLEDPageSafe(int page, int xOffset) {
+    // Préparer l'affichage en mémoire (pas d'I2C encore)
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    
+    struct tm timeinfo;
+    getLocalTime(&timeinfo);
+    int hour = timeinfo.tm_hour;
+    bool isDay = hour >= 8 && hour < 20;
+    bool heatingOn = (output > 0);
+    
+    switch (page) {
+        case 0:
+            if (config.weatherModeEnabled) {
+                display.printf("Temp Int/Ext %.1f\n", config.setpoint);
+                display.drawLine(0, 10, display.width(), 10, SSD1306_WHITE);
+                display.setCursor(0, 13);
+                display.setTextSize(2);
+                display.printf("%.1f %.1f\n", internalTemp, externalTemp);
+                
+                display.setCursor(0, 34);
+                display.setTextSize(1);
+                display.println("Hum Int / Ext");
+                display.drawLine(0, 44, display.width(), 44, SSD1306_WHITE);
+                display.setCursor(0, 47);
+                display.setTextSize(2);
+                display.printf("%.0f%%   %.0f%%", internalHum, externalHum);
+            } else {
+                display.println("Temp/hum Int");
+                display.drawLine(0, 10, display.width(), 10, SSD1306_WHITE);
+                display.setCursor(0, 13);
+                display.setTextSize(2);
+                display.printf("%.1fC %.1f%%\n", internalTemp, internalHum);
+                
+                display.setCursor(0, 34);
+                display.setTextSize(1);
+                display.println("Consigne");
+                display.drawLine(0, 44, display.width(), 44, SSD1306_WHITE);
+                display.setCursor(0, 47);
+                display.setTextSize(1);
+                display.printf("%.0fC %.0f\n", config.setpoint, output);
+            }
+            break;
+            
+        case 1:
+            if (!config.weatherModeEnabled) {
+                display.setTextSize(1);
+                display.println("Température max/min");
+                display.drawLine(0, 10, display.width(), 10, SSD1306_WHITE);
+                display.setCursor(0, 47);
+                display.setTextSize(2);
+                display.printf(" T %.1fC C %.1fC\n", config.globalMaxTempSet,config.globalMinTempSet);
+                display.printf(heatingOn ? "Chauf On  %.0f\n" : "Chauf Off  %.0f\n",output);
+            } 
+            
+            break;
+            
+        case 2:
+            display.setTextSize(1);
+            display.println("Securite");
+            display.drawLine(0, 10, display.width(), 10, SSD1306_WHITE);
+            display.setCursor(0, 13);
+            display.printf("Niveau: %d\n", safety.currentLevel);
+            display.setCursor(0, 25);
+            display.printf("Erreurs: %d\n", safety.consecutiveFailures);
+            display.setCursor(0, 37);
+            display.printf("Config: %s", config.lastSaveTime);
+            break;
+            
+        case 3:
+            display.setTextSize(1);
+            display.println("Heure actuelle");
+            display.drawLine(0, 10, display.width(), 10, SSD1306_WHITE);
+            display.setCursor(0, 13);
+            display.setTextSize(2);
+            char buf[10];
+            strftime(buf, sizeof(buf), "%H:%M", &timeinfo);
+            display.println(buf);
+            display.setTextSize(2);
+            display.println(heatingOn ? "Chauf On" : "Chauf Off");
+            display.printf("%.1fC\n", internalTemp);
+            break;
+    }
+    
+    // Maintenant, tentative d'envoi vers l'écran avec le système de priorité
+    updateDisplaySafe(false);
+}
+
+void slideToNextPage() {
+    display.clearDisplay();
+    renderOLEDPageSafe((displayPage + 1) % pageCount, SCREEN_WIDTH);
+    displayPage = (displayPage + 1) % pageCount;
+}
+
+void updateInternalSensor() {
+    safety.lastSensorRead = millis();
+    
+    float temp, hum;
+    
+    // Lecture avec priorité et retry automatique
+    if (readSensorWithPriority(temp, hum)) {
+        // Validation des données
+        if (abs(temp - safety.lastKnownGoodTemp) > 15.0 && safety.lastKnownGoodTemp != 22.0) {
+            Serial.printf("⚠️ Température suspecte: %.1f°C (dernière: %.1f°C)\n", temp, safety.lastKnownGoodTemp);
+            safety.temperatureOutOfRangeCount++;
+            if (safety.temperatureOutOfRangeCount < 3) {
+                return; // On ignore cette lecture suspecte
+            }
+        }
+        
+        // Données validées
+        internalTemp = temp;
+        internalHum = hum;
+        safety.consecutiveFailures = 0;
+        safety.temperatureOutOfRangeCount = 0;
+        safety.lastKnownGoodTemp = temp;
+        safety.lastKnownGoodHum = hum;
+        
+     //   DEBUG_LOG("🌡️ Capteurs OK: %.1f°C, %.0f%%", internalTemp, internalHum);
+    } else {
+        safety.consecutiveFailures++;
+        Serial.printf("❌ Échec lecture capteur après plusieurs tentatives (échec %d/%d)\n", 
+                     safety.consecutiveFailures, MAX_CONSECUTIVE_FAILURES);
+    }
+    
+    checkSafetyConditions();
+}
+// === FONCTIONS UTILITAIRES ===
+String readSht31Temperature() {
+    float t = sht31.readTemperature();
+    if (isnan(t)) {
+        Serial.println("Échec de lecture de température");
+        if (lastTemperature != 0.0) {
+            controlHeater(lastTemperature);
+            return String(lastTemperature);
+        }
+        return "--";
+    }
+    
+    lastTemperature = t;
+    temperatureWindow[windowIndex] = t;
+    windowIndex = (windowIndex + 1) % windowSize;
+    
+    if (windowIndex == 0) {
+        windowFilled = true;
+    }
+    
+    if (windowFilled) {
+        maxTemperature = -INFINITY;
+        minTemperature = INFINITY;
+        for (int i = 0; i < windowSize; i++) {
+            if (temperatureWindow[i] > maxTemperature) maxTemperature = temperatureWindow[i];
+            if (temperatureWindow[i] < minTemperature) minTemperature = temperatureWindow[i];
+        }
+    } else {
+        if (t > maxTemperature) maxTemperature = t;
+        if (t < minTemperature) minTemperature = t;
+    }
+    
+    controlHeater(t);
+    addToHistory(t, sht31.readHumidity());
+    return String(t, 1);
+}
+
+String readSht31Humidity() {
+    float h = sht31.readHumidity();
+    if (isnan(h)) {
+        Serial.println("Échec de lecture d'humidité");
+        return "--";
+    }
+    
+    humiditeWindow[windowIndex] = h;
+    
+    if (windowFilled) {
+        maxHumidite = -INFINITY;
+        minHumidite = INFINITY;
+        for (int i = 0; i < windowSize; i++) {
+            if (humiditeWindow[i] > maxHumidite) maxHumidite = humiditeWindow[i];
+            if (humiditeWindow[i] < minHumidite) minHumidite = humiditeWindow[i];
+        }
+    } else {
+        if (h > maxHumidite) maxHumidite = h;
+        if (h < minHumidite) minHumidite = h;
+    }
+    
+    return String(h, 1);
+}
+
+String getMovingAverageTemp() {
+    float sum = 0;
+    int count = windowFilled ? windowSize : windowIndex;
+    
+    if (count == 0) return "--";
+    
+    for (int i = 0; i < count; i++) {
+        sum += temperatureWindow[i];
+    }
+    float average = sum / count;
+    return String(average, 1);
+}
+
+String getMovingAverageHum() {
+    float sum = 0;
+    int count = windowFilled ? windowSize : windowIndex;
+    
+    if (count == 0) return "--";
+    
+    for (int i = 0; i < count; i++) {
+        sum += humiditeWindow[i];
+    }
+    float average = sum / count;
+    return String(average, 1);
+}
+
+int calculateDayOfYear(int day, int month, int year) {
+    const int daysInMonth[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    int dayOfYear = day;
+
+    for (int i = 0; i < month - 1; i++) {
+        dayOfYear += daysInMonth[i];
+    }
+
+    // Année bissextile ?
+    if (month > 2 && (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0))) {
+        dayOfYear++;
+    }
+
+    return dayOfYear - 1; // index 0-based
+}
+
+String getHeaterState() {
+    int percentage = map(output, 0, 255, 0, 100);
+    return String(percentage);
+}
+
+String getCurrentTime() {
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) {
+        return "--:--";
+    }
+    
+    char timeString[9];
+    strftime(timeString, sizeof(timeString), "%H:%M:%S", &timeinfo);
+    return String(timeString);
+}
+
+// === HANDLERS ===
+void handleHistoryRequest(AsyncWebServerRequest *request) {
+    String json = "[";
+    int total = historyFull ? MAX_HISTORY_RECORDS : historyIndex;
+    bool first = true;
+    
+    for (int i = 0; i < total; i++) {
+        int idx = (historyIndex + i) % MAX_HISTORY_RECORDS;
+        HistoryRecord r = history[idx];
+        
+        if (r.timestamp == 0) continue;
+        
+        if (!first) json += ",";
+        first = false;
+        
+        json += String("{\"t\":") + r.timestamp + 
+                ",\"temp\":" + String(r.temperature, 1) + 
+                ",\"hum\":" + String(r.humidity, 1) + "}";
+    }
+    
+    json += "]";
+    request->send(200, "application/json", json);
+}
+
+void handleSaveConfiguration(AsyncWebServerRequest *request) {
+    if (request->hasParam("applyBtn")) {
+      //syncGlobalsToConfig();
+    Serial.println("💾 Sauvegarde demandée");
+    savePending = false;
+    saveConfigIfChanged();
+
+      request->send(200, "text/plain", "Configuration sauvegardée demandée handleSaveConfiguration");
+    } else {
+        request->send(400, "text/plain", "Paramètre manquant handleSaveConfiguration");
+    }
+}
+
+void handleGlobalTempSettings(AsyncWebServerRequest *request) {
+    if (request->url().endsWith("MinTemp")) {
+        if (request->hasParam("globalMinTempSet")) {
+            config.globalMinTempSet = request->getParam("globalMinTempSet")->value().toFloat();
+            request->send(200, "text/plain", "Min OK");
+        } else {
+            request->send(200, "text/plain", "Valeur actuelle : " + String(config.globalMinTempSet));
+        }
+    } else if (request->url().endsWith("MaxTemp")) {
+        if (request->hasParam("globalMaxTempSet")) {
+            config.globalMaxTempSet = request->getParam("globalMaxTempSet")->value().toFloat();
+            request->send(200, "text/plain", "Max OK");
+        } else {
+            request->send(200, "text/plain", "Valeur actuelle : " + String(config.globalMaxTempSet));
+        }
+    } else {
+        request->send(404, "text/plain", "Route inconnue");
+    }
+}
+
+void handlePWMModeSetting(AsyncWebServerRequest *request) {
+    if (request->hasParam("usePWM")) {
+        config.usePWM = request->getParam("usePWM")->value().toInt() == 1;
+        Serial.printf("[CONF] Mode PWM : %s\n", config.usePWM ? "Activé" : "Désactivé");
+        requestConfigSave();
+        request->send(200, "text/plain", "PWM OK");
+    } else {
+        request->send(400, "text/plain", "Paramètre manquant");
+    }
+}
+
+void handleHysteresisSetting(AsyncWebServerRequest *request) {
+    if (request->hasParam("hysteresis")) {
+        config.hysteresis = request->getParam("hysteresis")->value().toFloat();
+        Serial.printf("[CONF] Hystérésis : %.2f\n", config.hysteresis);
+        requestConfigSave();
+        request->send(200, "text/plain", "Hystérésis OK");
+    } else {
+        request->send(400, "text/plain", "Paramètre manquant");
+    }
+}
+
+void handlePIDSetting(AsyncWebServerRequest *request) {
+    if (request->hasParam("Kp") && request->hasParam("Ki") && request->hasParam("Kd")) {
+        config.Kp = request->getParam("Kp")->value().toFloat();
+        config.Ki = request->getParam("Ki")->value().toFloat();
+        config.Kd = request->getParam("Kd")->value().toFloat();
+
+        myPID.SetTunings(config.Kp, config.Ki, config.Kd);
+
+        Serial.printf("[CONF] PID Kp=%.2f, Ki=%.2f, Kd=%.2f\n", config.Kp, config.Ki, config.Kd);
+        request->send(200, "text/plain", "PID OK");
+    } else {
+        request->send(400, "text/plain", "Paramètres manquants");
+    }
+}
+
+void handleApplyAllSettings(AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
+    StaticJsonDocument<2048> doc;
+    DeserializationError error = deserializeJson(doc, data, len);
+
+    if (error) {
+        request->send(400, "text/plain", "Erreur de parsing JSON");
+        return;
+    }
+
+    // Mise à jour directe de la structure config
+    if (doc.containsKey("hysteresis")) config.hysteresis = doc["hysteresis"];
+    if (doc.containsKey("Kp")) config.Kp = doc["Kp"];
+    if (doc.containsKey("Ki")) config.Ki = doc["Ki"];
+    if (doc.containsKey("Kd")) config.Kd = doc["Kd"];
+    if (doc.containsKey("usePWM")) config.usePWM = doc["usePWM"];
+    if (doc.containsKey("globalMinTempSet")) config.globalMinTempSet = doc["globalMinTempSet"];
+    if (doc.containsKey("globalMaxTempSet")) config.globalMaxTempSet = doc["globalMaxTempSet"];
+    if (doc.containsKey("latitude")) config.latitude = doc["latitude"];
+    if (doc.containsKey("longitude")) config.longitude = doc["longitude"];
+    if (doc.containsKey("weatherModeEnabled")) config.weatherModeEnabled = doc["weatherModeEnabled"];
+    if (doc.containsKey("currentProfileName")) config.currentProfileName = doc["currentProfileName"].as<String>();
+   
+    if (doc.containsKey("cameraEnabled")) config.cameraEnabled = doc["cameraEnabled"];
+	if (doc.containsKey("cameraResolution")) config.cameraResolution = doc["cameraResolution"].as<String>();
+    if (doc.containsKey("useLimitTemp")) config.useLimitTemp = doc["useLimitTemp"];
+    if (doc.containsKey("ledState")) config.ledState = doc["ledState"];
+    if (doc.containsKey("ledBrightness")) config.ledBrightness = doc["ledBrightness"];
+    if (doc.containsKey("ledRed")) config.ledRed = doc["ledRed"];
+    if (doc.containsKey("ledGreen")) config.ledGreen = doc["ledGreen"];
+    if (doc.containsKey("ledBlue")) config.ledBlue = doc["ledBlue"];
+    if (doc.containsKey("seasonalModeEnabled")) config.seasonalModeEnabled = doc["seasonalModeEnabled"];
+    if (doc.containsKey("tempCurve") && doc["tempCurve"].is<JsonArray>()) {
+        JsonArray curve = doc["tempCurve"].as<JsonArray>();
+        for (int i = 0; i < TEMP_CURVE_POINTS && i < curve.size(); i++) {
+            config.tempCurve[i] = curve[i].as<float>();
+        }
+    }
+
+    // Appliquer immédiatement les changements PID
+    myPID.SetTunings(config.Kp, config.Ki, config.Kd);
+
+    // Appliquer immédiatement l'état de la LED
+    pixels.setBrightness(config.ledBrightness);
+    if (config.ledState) {
+      pixels.setPixelColor(0, pixels.Color(config.ledRed, config.ledGreen, config.ledBlue));
+    } else {
+      pixels.setPixelColor(0, pixels.Color(0, 0, 0));
+    }
+    pixels.show();
+    
+    // Demander la sauvegarde
+    requestConfigSave();
+
+    Serial.println("[CONF] ✔️ Paramètres appliqués et sauvegardés via /applyAllSettings");
+    request->send(200, "text/plain", "Paramètres appliqués et sauvegardés");
+}
+
+// === RESOLUTION CAM ===
+void handleResolutionSetting(AsyncWebServerRequest *request) {
+    if (request->hasParam("quality")) {
+        String quality = request->getParam("quality")->value();
+
+        sensor_t *s = esp_camera_sensor_get();
+
+        if (quality == "qvga") {
+            s->set_framesize(s, FRAMESIZE_QVGA);
+        } else if (quality == "vga") {
+            s->set_framesize(s, FRAMESIZE_VGA);
+        } else if (quality == "svga") {
+            s->set_framesize(s, FRAMESIZE_SVGA);
+        } else {
+            request->send(400, "text/plain", "Valeur de qualité non valide");
+            return;
+        }
+
+        Serial.printf("Résolution de la caméra définie sur: %s\n", quality.c_str());
+        request->send(200, "text/plain", "Résolution mise à jour");
+    } else {
+        request->send(400, "text/plain", "Paramètre de qualité manquant");
+    }
+}
+
+// === STREAMING VIDÉO OPTIMISÉ ===
+void handleVideoStream(AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginChunkedResponse("multipart/x-mixed-replace; boundary=frame",
+        [](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
+            static camera_fb_t *fb = nullptr;
+            static size_t _jpg_buf_len = 0;
+            static uint8_t *_jpg_buf = nullptr;
+            static size_t sent = 0;
+
+            // Nouvelle frame ?
+            if (index == 0) {
+                if (fb) {
+                    esp_camera_fb_return(fb);
+                }
+                
+                fb = esp_camera_fb_get();
+                if (!fb) {
+                    Serial.println("❌ Échec capture frame");
+                    return 0;
+                }
+                
+                _jpg_buf = fb->buf;
+                _jpg_buf_len = fb->len;
+                sent = 0;
+                
+                // En-tête multipart
+                String header = "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + 
+                               String(_jpg_buf_len) + "\r\n\r\n";
+                
+                if (header.length() <= maxLen) {
+                    memcpy(buffer, header.c_str(), header.length());
+                    return header.length();
+                }
+                return 0;
+            }
+            
+            // Envoi des données JPEG
+            if (sent < _jpg_buf_len) {
+                size_t to_send = min(maxLen, _jpg_buf_len - sent);
+                memcpy(buffer, _jpg_buf + sent, to_send);
+                sent += to_send;
+                
+                // Frame terminée ?
+                if (sent >= _jpg_buf_len) {
+                    String footer = "\r\n";
+                    if (to_send + footer.length() <= maxLen) {
+                        memcpy(buffer + to_send, footer.c_str(), footer.length());
+                        to_send += footer.length();
+                    }
+                }
+                
+                return to_send;
+            }
+            
+            // Libérer la frame
+            if (fb) {
+                esp_camera_fb_return(fb);
+                fb = nullptr;
+            }
+            
+            return 0; // Fin de cette frame
+        }
+    );
+    
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    response->addHeader("Pragma", "no-cache");
+    response->addHeader("Expires", "0");
+    
+    request->send(response);
+}
+
+void startCamera() {
+    camera_config_t cam_config;
+    cam_config.ledc_channel = LEDC_CHANNEL_0;
+    cam_config.ledc_timer = LEDC_TIMER_0;
+    cam_config.pin_d0 = Y2_GPIO_NUM;
+    cam_config.pin_d1 = Y3_GPIO_NUM;
+    cam_config.pin_d2 = Y4_GPIO_NUM;
+    cam_config.pin_d3 = Y5_GPIO_NUM;
+    cam_config.pin_d4 = Y6_GPIO_NUM;
+    cam_config.pin_d5 = Y7_GPIO_NUM;
+    cam_config.pin_d6 = Y8_GPIO_NUM;
+    cam_config.pin_d7 = Y9_GPIO_NUM;
+    cam_config.pin_xclk = XCLK_GPIO_NUM;
+    cam_config.pin_pclk = PCLK_GPIO_NUM;
+    cam_config.pin_vsync = VSYNC_GPIO_NUM;
+    cam_config.pin_href = HREF_GPIO_NUM;
+    cam_config.pin_sccb_sda = SIOD_GPIO_NUM;
+    cam_config.pin_sccb_scl = SIOC_GPIO_NUM;
+    cam_config.pin_pwdn = PWDN_GPIO_NUM;
+    cam_config.pin_reset = RESET_GPIO_NUM;
+    
+    // === OPTIMISATIONS POUR LA VITESSE ===
+    cam_config.xclk_freq_hz = 20000000;  //  20MHz 
+    cam_config.pixel_format = PIXFORMAT_JPEG;
+    
+    // Résolution adaptative selon config
+    if (config.cameraResolution == "qvga") {
+        cam_config.frame_size = FRAMESIZE_QVGA;    // 320x240 - très rapide
+        cam_config.jpeg_quality = 8;               // Qualité réduite pour plus de vitesse
+        cam_config.fb_count = 2;                   // Double buffering
+    } else if (config.cameraResolution == "vga") {
+        cam_config.frame_size = FRAMESIZE_VGA;     // 640x480 - compromis
+        cam_config.jpeg_quality = 12;              
+        cam_config.fb_count = 2;
+    } else {
+        cam_config.frame_size = FRAMESIZE_SVGA;    // 800x600 - plus lent
+        cam_config.jpeg_quality = 15;
+        cam_config.fb_count = 1;                   // Un seul buffer pour les grandes résolutions
+    }
+    
+    // === PARAMÈTRES AVANCÉS POUR L'OPTIMISATION ===
+    cam_config.grab_mode = CAMERA_GRAB_LATEST;     // Prendre toujours la dernière image
+    
+    esp_err_t err = esp_camera_init(&cam_config);
+    if (err != ESP_OK) {
+        Serial.printf("❌ Erreur d'init caméra : 0x%x\n", err);
+        config.cameraEnabled = false;
+        return;
+    }
+
+    // === POST-CONFIGURATION POUR OPTIMISER LA VITESSE ===
+    sensor_t *s = esp_camera_sensor_get();
+    if (s != NULL) {
+        // Paramètres spécifiques à l'OV5640 pour améliorer la vitesse
+        s->set_brightness(s, 0);       // Luminosité par défaut
+        s->set_contrast(s, 0);         // Contraste par défaut
+        s->set_saturation(s, 0);       // Saturation par défaut
+        s->set_special_effect(s, 0);   // Pas d'effets spéciaux
+        s->set_whitebal(s, 1);         // Balance des blancs automatique
+        s->set_awb_gain(s, 1);         // Gain automatique
+        s->set_wb_mode(s, 0);          // Mode balance des blancs auto
+        s->set_exposure_ctrl(s, 1);    // Contrôle d'exposition automatique
+        s->set_aec2(s, 0);             // Algorithme d'exposition rapide
+        s->set_ae_level(s, 0);         // Niveau d'exposition
+        s->set_aec_value(s, 300);      // Valeur d'exposition fixe (rapide)
+        s->set_gain_ctrl(s, 1);        // Contrôle du gain
+        s->set_agc_gain(s, 0);         // Gain automatique
+        s->set_gainceiling(s, (gainceiling_t)0); // Plafond de gain minimal
+        s->set_bpc(s, 0);              // Désactiver la correction de pixels morts
+        s->set_wpc(s, 1);              // Correction des pixels blancs
+        s->set_raw_gma(s, 1);          // Gamma par défaut
+        s->set_lenc(s, 1);             // Correction de lentille
+        s->set_hmirror(s, 0);          // Pas de miroir horizontal
+        s->set_vflip(s, 0);            // Pas de flip vertical
+        s->set_dcw(s, 1);              // Downsize enable pour plus de vitesse
+        s->set_colorbar(s, 0);         // Pas de barre de couleurs
+        
+        Serial.println("✅ Caméra configurée pour vitesse optimale");
+    }
+}
+
+void testCameraSpeed() {
+    Serial.println("🎥 Test de vitesse caméra...");
+    
+    unsigned long start = millis();
+    int frames = 0;
+    
+    for (int i = 0; i < 50; i++) {
+        camera_fb_t *fb = esp_camera_fb_get();
+        if (fb) {
+            frames++;
+            esp_camera_fb_return(fb);
+        }
+        delay(10);
+    }
+    
+    unsigned long duration = millis() - start;
+    float fps = (frames * 1000.0) / duration;
+    
+    Serial.printf("📊 %d frames en %lu ms = %.1f FPS\n", frames, duration, fps);
+}
+
+// === NOUVELLE GESTION DES PROFILS (par dossier) ===
+bool ensureProfileDirectoryExists() {
+    if (!LittleFS.exists("/profiles")) {
+        if (LittleFS.mkdir("/profiles")) {
+            DEBUG_LOG("Dossier /profiles créé.");
+            return true;
+        } else {
+            Serial.println("❌ Échec de la création du dossier /profiles.");
+            return false;
+        }
+    }
+    return true;
+}
+
+bool saveProfileConfig(const String& profileName, JsonDocument& doc) {
+    String configPath = "/profiles/" + profileName + "/config.json";
+    File file = LittleFS.open(configPath, "w");
+    if (!file) {
+        DEBUG_LOG("Échec de l'ouverture de %s en écriture", configPath.c_str());
+        return false;
+    }
+    if (serializeJson(doc, file) == 0) {
+        DEBUG_LOG("Échec de l'écriture dans %s", configPath.c_str());
+        file.close();
+        return false;
+    }
+    file.close();
+    DEBUG_LOG("Configuration sauvegardée dans %s", configPath.c_str());
+    return true;
+}
+
+bool saveProfileSchedule(const String& profileName, JsonArray seasonalData) {
+    String schedulePath = "/profiles/" + profileName + "/temperature.bin";
+    File file = LittleFS.open(schedulePath, "w");
+    if (!file) {
+        DEBUG_LOG("Échec de l'ouverture de %s en écriture", schedulePath.c_str());
+        return false;
+    }
+
+    for (int day = 0; day < 366; ++day) {
+        JsonArray dayTemps;
+        if (day < seasonalData.size()) {
+            dayTemps = seasonalData[day].as<JsonArray>();
+        }
+        for (int hour = 0; hour < 24; ++hour) {
+            float tempFloat = 22.0; // Valeur par défaut
+            if (dayTemps && hour < dayTemps.size()) {
+                tempFloat = dayTemps[hour].as<float>();
+            }
+            int16_t tempInt = (int16_t)round(tempFloat * 10.0f);
+            file.write((uint8_t*)&tempInt, sizeof(int16_t));
+        }
+    }
+    file.close();
+    DEBUG_LOG("Planning de température sauvegardé dans %s", schedulePath.c_str());
+    return true;
+}
+
+void handleSaveProfile(AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
+    DynamicJsonDocument doc(35000);
+    if (deserializeJson(doc, data, len) != DeserializationError::Ok) {
+        request->send(400, "text/plain", "JSON invalide");
+        return;
+    }
+
+    String profileName = doc["name"];
+    if (profileName.isEmpty()) {
+        request->send(400, "text/plain", "Nom de profil manquant");
+        return;
+    }
+
+    ensureProfileDirectoryExists();
+    String profilePath = "/profiles/" + profileName;
+    if (!LittleFS.exists(profilePath)) {
+        LittleFS.mkdir(profilePath);
+    }
+
+    JsonVariant seasonalData = doc["seasonalData"];
+    doc.remove("seasonalData");
+
+    if (!saveProfileConfig(profileName, doc)) {
+        request->send(500, "text/plain", "Échec de sauvegarde de config.json");
+        return;
+    }
+
+    if (seasonalData.is<JsonArray>()) {
+        if (!saveProfileSchedule(profileName, seasonalData.as<JsonArray>())) {
+            request->send(500, "text/plain", "Échec de sauvegarde de temperature.bin");
+            return;
+        }
+    }
+
+    request->send(200, "text/plain", "Profil sauvegardé avec succès");
+}
+
+void handleLoadProfile(AsyncWebServerRequest *request) {
+    if (!request->hasParam("name")) {
+        request->send(400, "text/plain", "Nom de profil manquant");
+        return;
+    }
+    String profileName = request->getParam("name")->value();
+    String configPath = "/profiles/" + profileName + "/config.json";
+
+    if (!LittleFS.exists(configPath)) {
+        request->send(404, "text/plain", "Profil non trouvé");
+        return;
+    }
+    
+    File file = LittleFS.open(configPath, "r");
+    if (file) {
+        DynamicJsonDocument doc(2048);
+        if (deserializeJson(doc, file) == DeserializationError::Ok) {
+            // Appliquer la configuration
+            if (doc.containsKey("usePWM")) config.usePWM = doc["usePWM"];
+            if (doc.containsKey("hysteresis")) config.hysteresis = doc["hysteresis"];
+            if (doc.containsKey("Kp")) config.Kp = doc["Kp"];
+            if (doc.containsKey("Ki")) config.Ki = doc["Ki"];
+            if (doc.containsKey("Kd")) config.Kd = doc["Kd"];
+            if (doc.containsKey("useLimitTemp")) config.useLimitTemp = doc["useLimitTemp"];
+            if (doc.containsKey("globalMinTempSet")) config.globalMinTempSet = doc["globalMinTempSet"];
+            if (doc.containsKey("globalMaxTempSet")) config.globalMaxTempSet = doc["globalMaxTempSet"];
+            if (doc.containsKey("weatherModeEnabled")) config.weatherModeEnabled = doc["weatherModeEnabled"];
+            if (doc.containsKey("latitude")) config.latitude = doc["latitude"];
+            if (doc.containsKey("longitude")) config.longitude = doc["longitude"];
+            if (doc.containsKey("seasonalModeEnabled")) config.seasonalModeEnabled = doc["seasonalModeEnabled"];
+            if (doc.containsKey("cameraEnabled")) config.cameraEnabled = doc["cameraEnabled"];
+            if (doc.containsKey("cameraResolution")) config.cameraResolution = doc["cameraResolution"].as<String>();
+            if (doc.containsKey("ledState")) config.ledState = doc["ledState"];
+            if (doc.containsKey("ledBrightness")) config.ledBrightness = doc["ledBrightness"];
+            if (doc.containsKey("ledRed")) config.ledRed = doc["ledRed"];
+            if (doc.containsKey("ledGreen")) config.ledGreen = doc["ledGreen"];
+            if (doc.containsKey("ledBlue")) config.ledBlue = doc["ledBlue"];
+            if (doc.containsKey("temperatures")) {
+                JsonArray arr = doc["temperatures"];
+                for (int h = 0; h < 24 && h < arr.size(); h++) {
+                    config.tempCurve[h] = arr[h];
+                }
+            }
+            myPID.SetTunings(config.Kp, config.Ki, config.Kd);
+            currentProfileName = profileName;
+            requestConfigSave(); // Sauvegarde la config active dans les préférences
+            DEBUG_LOG("Profil '%s' chargé et appliqué.", profileName.c_str());
+        }
+        file.close();
+    }
+
+    request->send(LittleFS, configPath, "application/json");
+}
+
+void handleGetProfileSchedule(AsyncWebServerRequest *request) {
+    if (!request->hasParam("name")) {
+        request->send(400, "text/plain", "Nom de profil manquant");
+        return;
+    }
+    String profileName = request->getParam("name")->value();
+    String schedulePath = "/profiles/" + profileName + "/temperature.bin";
+
+    if (!LittleFS.exists(schedulePath)) {
+        request->send(404, "text/plain", "Données de planning non trouvées pour ce profil");
+        return;
+    }
+
+    File file = LittleFS.open(schedulePath, "r");
+    if (!file) {
+        request->send(500, "text/plain", "Échec d'ouverture du fichier de planning");
+        return;
+    }
+
+    AsyncResponseStream *response = request->beginResponseStream("application/json");
+    response->print("[");
+    for (int d = 0; d < 366; d++) {
+        if (d > 0) response->print(",");
+        response->print("[");
+        for (int h = 0; h < 24; h++) {
+            int16_t tempInt;
+            if (file.read((uint8_t*)&tempInt, sizeof(int16_t)) == sizeof(int16_t)) {
+                if (h > 0) response->print(",");
+                response->printf("%.1f", tempInt / 10.0f);
+            }
+        }
+        response->print("]");
+    }
+    response->print("]");
+    request->send(response);
+    file.close();
+}
+
+void handleListProfiles(AsyncWebServerRequest *request) {
+    ensureProfileDirectoryExists();
+    DynamicJsonDocument doc(2048);
+    JsonArray profiles = doc.to<JsonArray>();
+    File root = LittleFS.open("/profiles");
+    File file = root.openNextFile();
+    while(file){
+        if(file.isDirectory()){
+            JsonObject profile = profiles.createNestedObject();
+            String profileName = String(file.name());
+            profileName.replace("/profiles/", "");
+            profile["name"] = profileName;
+            String configPath = String(file.name()) + "/config.json";
+            if (LittleFS.exists(configPath)) {
+                 File configFile = LittleFS.open(configPath, "r");
+                 profile["size"] = configFile.size();
+                 configFile.close();
+            }
+        }
+        file = root.openNextFile();
+    }
+    String output;
+    serializeJson(doc, output);
+    request->send(200, "application/json", output);
+}
+
+bool deleteDirectory(const char* path) {
+    File root = LittleFS.open(path);
+    if(!root || !root.isDirectory()){ return false; }
+    File file = root.openNextFile();
+    while(file){
+        String filePath = String(path) + "/" + file.name();
+        if(file.isDirectory()){
+            deleteDirectory(filePath.c_str());
+        } else {
+            LittleFS.remove(filePath.c_str());
+        }
+        file = root.openNextFile();
+    }
+    return LittleFS.rmdir(path);
+}
+
+void handleDeleteProfile(AsyncWebServerRequest *request) {
+    if (!request->hasParam("name")) {
+        request->send(400, "text/plain", "Nom de profil manquant");
+        return;
+    }
+    String profileName = request->getParam("name")->value();
+    String profilePath = "/profiles/" + profileName;
+    if (LittleFS.exists(profilePath) && deleteDirectory(profilePath.c_str())) {
+        request->send(200, "text/plain", "Profil supprimé");
+    } else {
+        request->send(500, "text/plain", "Échec de la suppression du profil");
+    }
+}
+
+void handleRenameProfile(AsyncWebServerRequest *request) {
+    if (!request->hasParam("from") || !request->hasParam("to")) {
+        request->send(400, "text/plain", "Paramètres manquants");
+        return;
+    }
+    String fromPath = "/profiles/" + request->getParam("from")->value();
+    String toPath = "/profiles/" + request->getParam("to")->value();
+    if (LittleFS.rename(fromPath, toPath)) {
+        request->send(200, "text/plain", "Profil renommé");
+    } else {
+        request->send(500, "text/plain", "Échec du renommage");
+    }
+}
+
+void generateDefaultDayTemperatures(int dayIndex, float* dayTemps) {
+    // Variation saisonnière basée sur le jour de l'année
+    float seasonalBase = 22.0 + 6.0 * sin((dayIndex / 366.0) * 2.0 * PI - PI/2);
+    
+    for (int hour = 0; hour < 24; hour++) {
+        // Utiliser la même logique que votre constructeur SystemConfig
+        float baseTemp = 22.2 + (hour >= 8 && hour <= 20 ? 3.0 : 0.0);
+        
+        // Ajouter variation saisonnière
+        float seasonalVariation = seasonalBase - 22.0; // Décalage par rapport à la base
+        
+        dayTemps[hour] = baseTemp + seasonalVariation;
+        
+        // S'assurer que les températures restent dans des limites raisonnables
+        if (dayTemps[hour] < 15.0) dayTemps[hour] = 15.0;
+        if (dayTemps[hour] > 35.0) dayTemps[hour] = 35.0;
+    }
+}
+
+// ✅ Créer temperature.bin pour un profil
+void createDefaultTemperatureBinForProfile(const String& profileName) {
+    String tempPath = "/profiles/" + profileName + "/temperature.bin";
+    
+    File tempFile = LittleFS.open(tempPath, "w");
+    if (!tempFile) {
+        Serial.printf("❌ Impossible de créer %s\n", tempPath.c_str());
+        return;
+    }
+    
+    float dayTemps[24];
+    for (int day = 0; day < 366; day++) {
+        generateDefaultDayTemperatures(day, dayTemps); // ✅ Fonction maintenant définie
+        tempFile.write((uint8_t*)dayTemps, 24 * sizeof(float));
+    }
+    
+    tempFile.close();
+    Serial.printf("✅ temperature.bin créé pour le profil '%s'\n", profileName.c_str());
+}
+
+void createTemperatureBinFromCurrentCurve(const String& profileName) {
+    String tempPath = "/profiles/" + profileName + "/temperature.bin";
+    
+    File tempFile = LittleFS.open(tempPath, "w");
+    if (!tempFile) {
+        Serial.printf("❌ Impossible de créer %s\n", tempPath.c_str());
+        return;
+    }
+    
+    float dayTemps[24];
+    for (int day = 0; day < 366; day++) {
+        // Générer des données basées sur VOTRE tempCurve
+        for (int hour = 0; hour < 24; hour++) {
+            float baseTemp = config.tempCurve[hour]; // Utiliser VOTRE courbe 24h
+            // Ajouter une variation saisonnière
+            float seasonalVariation = 3.0 * sin((day / 366.0) * 2.0 * PI - PI/2);
+            dayTemps[hour] = baseTemp + seasonalVariation;
+            
+            // Limites de sécurité
+            if (dayTemps[hour] < config.globalMinTempSet) dayTemps[hour] = config.globalMinTempSet;
+            if (dayTemps[hour] > config.globalMaxTempSet) dayTemps[hour] = config.globalMaxTempSet;
+        }
+        
+        // Écrire ce jour
+        tempFile.write((uint8_t*)dayTemps, 24 * sizeof(float));
+    }
+    
+    tempFile.close();
+    Serial.printf("✅ temperature.bin créé pour '%s' basé sur tempCurve actuelle\n", profileName.c_str());
+}
+
+// ✅ Créer un profil par défaut basé sur votre structure
+void createDefaultProfile() {
+    String profileDir = "/profiles/default";
+    String generalPath = profileDir + "/general.json";
+    
+    // Créer le dossier
+    if (!LittleFS.exists(profileDir)) {
+        LittleFS.mkdir(profileDir);
+    }
+    
+    // ✅ Créer general.json depuis VOTRE SystemConfig par défaut
+    File generalFile = LittleFS.open(generalPath, "w");
+    if (generalFile) {
+        StaticJsonDocument<1024> doc;
+        doc["name"] = "default";
+        doc["timestamp"] = String(millis());
+        doc["version"] = "2.0";
+        doc["profileType"] = "journalier";
+        
+        // ✅ Utiliser VOS valeurs par défaut de SystemConfig
+        doc["usePWM"] = false;
+        doc["weatherModeEnabled"] = false;
+        doc["cameraEnabled"] = false;
+        doc["cameraResolution"] = "qvga";
+        doc["useTempCurve"] = false;
+        doc["useLimitTemp"] = true;
+        
+        doc["hysteresis"] = 0.3;
+        doc["Kp"] = 2.0;
+        doc["Ki"] = 5.0;
+        doc["Kd"] = 1.0;
+        doc["setpoint"] = 23.0;
+        
+        doc["latitude"] = 48.85;
+        doc["longitude"] = 2.35;
+        doc["DST_offset"] = 2;
+        
+        doc["globalMinTempSet"] = 15.0;
+        doc["globalMaxTempSet"] = 35.0;
+        
+        // ✅ Courbe par défaut selon VOTRE constructeur
+        JsonArray temps = doc.createNestedArray("tempCurve");
+        for (int i = 0; i < TEMP_CURVE_POINTS; i++) {
+            temps.add(22.2 + (i >= 8 && i <= 20 ? 3.0 : 0.0)); // VOTRE logique exacte
+        }
+        
+        doc["ledState"] = false;
+        doc["ledBrightness"] = 255;
+        doc["ledRed"] = 255;
+        doc["ledGreen"] = 255;
+        doc["ledBlue"] = 255;
+        
+        doc["configVersion"] = 1;
+        doc["seasonalModeEnabled"] = false;
+        doc["debugModeEnabled"] = false;
+        
+        serializeJson(doc, generalFile);
+        generalFile.close();
+        Serial.println("✅ general.json par défaut créé selon SystemConfig");
+    }
+    
+    // Créer temperature.bin basé sur la courbe par défaut
+    createTemperatureBinFromCurrentCurve("default");
+}
+
+bool readDayFromTemperatureBin(const String& filePath, int dayIndex, int16_t* dayTemperatures) {
+    File file = LittleFS.open(filePath, "r");
+    if (!file) {
+        Serial.printf("❌ Impossible d'ouvrir %s\n", filePath.c_str());
+        return false;
+    }
+    
+    // Position: jour × 24 heures × 2 bytes
+    size_t offset = dayIndex * 24 * sizeof(int16_t);
+    
+    if (!file.seek(offset)) {
+        Serial.printf("❌ Seek impossible offset %d\n", offset);
+        file.close();
+        return false;
+    }
+    
+    // Lire 24 températures int16
+    size_t bytesRead = file.read((uint8_t*)dayTemperatures, 24 * sizeof(int16_t));
+    file.close();
+    
+    if (bytesRead != 24 * sizeof(int16_t)) {
+        Serial.printf("❌ Lecture incomplète: %d bytes\n", bytesRead);
+        return false;
+    }
+    
+    Serial.printf("✅ Jour %d lu (int16): %d à %d\n", dayIndex, dayTemperatures[0], dayTemperatures[23]);
+    return true;
+}
+
+// ✅ MODIFICATION 3: Conversion lors de l'utilisation
+float getCurrentTargetTemperature() {
+    // ... votre logique existante pour déterminer l'heure ...
+    
+    int16_t tempInt16 = dayTemperatures[currentHour];
+    
+    // Conversion int16 → float (diviser par 10)
+    float targetTemp = tempInt16 / 10.0f;
+    
+    Serial.printf("🎯 Température cible: %d/10 = %.1f°C\n", tempInt16, targetTemp);
+    
+    return targetTemp;
+}
+
+// ✅ MODIFICATION 4: Diagnostic adapté
+void diagnosticTemperatureData() {
+    Serial.println("\n🌡️ TEST DONNÉES INT16");
+    
+    int dayOfYear = 100; // Test
+    if (readDayFromTemperatureBin("/profiles/default/temperature.bin", dayOfYear, dayTemperatures)) {
+        Serial.printf("📅 Jour %d (format int16):\n", dayOfYear + 1);
+        Serial.println("Heure | Int16 | Float");
+        Serial.println("------|-------|------");
+        
+        for (int h = 0; h < 24; h += 4) {
+            float temp = dayTemperatures[h] / 10.0f;
+            Serial.printf("%02d:%02d | %5d | %5.1f\n", h, 0, dayTemperatures[h], temp);
+        }
+    }
+    
+    Serial.println("========================\n");
+}
+// ✅ Sauvegarder un jour dans temperature.bin
+bool saveDayToTemperatureBin(const String& filePath, int dayIndex, float* dayTemperatures) {
+    File file = LittleFS.open(filePath, "r+"); // Ouvrir en lecture/écriture
+    if (!file) {
+        Serial.printf("❌ Impossible d'ouvrir %s en écriture\n", filePath.c_str());
+        return false;
+    }
+    
+    // Se positionner au bon endroit
+    size_t offset = dayIndex * 24 * sizeof(float);
+    if (!file.seek(offset)) {
+        Serial.printf("❌ Impossible de se positionner à l'offset %d\n", offset);
+        file.close();
+        return false;
+    }
+    
+    // Écrire les 24 températures
+    size_t bytesWritten = file.write((uint8_t*)dayTemperatures, 24 * sizeof(float));
+    file.close();
+    
+    if (bytesWritten != 24 * sizeof(float)) {
+        Serial.printf("❌ Écriture incomplète: %d bytes au lieu de %d\n", bytesWritten, 24 * sizeof(float));
+        return false;
+    }
+    
+    Serial.printf("✅ Jour %d sauvegardé dans %s\n", dayIndex, filePath.c_str());
+    return true;
+}
+
+// ✅ Créer un fichier temperature.bin par défaut
+void createDefaultTemperatureBin() {
+    String defaultPath = "/profiles/default";
+    String binPath = defaultPath + "/temperature.bin";
+    
+    // Créer le dossier si nécessaire
+    if (!LittleFS.exists(defaultPath)) {
+        LittleFS.mkdir(defaultPath);
+    }
+    
+    File file = LittleFS.open(binPath, "w");
+    if (!file) {
+        Serial.println("❌ Impossible de créer temperature.bin par défaut");
+        return;
+    }
+    
+    // Générer 366 jours de données par défaut
+    float defaultTemp[24];
+    
+    for (int day = 0; day < 366; day++) {
+        // Variation saisonnière
+        float seasonalBase = 22.0 + 6.0 * sin((day / 366.0) * 2.0 * PI - PI/2);
+        
+        // Générer 24 heures pour ce jour
+        for (int hour = 0; hour < 24; hour++) {
+            if (hour >= 8 && hour <= 20) {
+                defaultTemp[hour] = seasonalBase + 2.0; // Jour plus chaud
+            } else {
+                defaultTemp[hour] = seasonalBase - 1.0; // Nuit plus fraîche
+            }
+        }
+        
+        // Écrire ce jour dans le fichier
+        file.write((uint8_t*)defaultTemp, 24 * sizeof(float));
+    }
+    
+    file.close();
+    Serial.println("✅ Fichier temperature.bin par défaut créé");
+}
+
+// ✅ FONCTION DE DIAGNOSTIC COMPLÈTE
+void diagnosticProfile() {
+    Serial.println("\n" + String('=', 50));
+    Serial.println("🔍 DIAGNOSTIC DU SYSTÈME DE PROFILS");
+    Serial.println(String('=', 50));
+    
+    // 1. Vérifier le dossier profiles
+    Serial.println("📁 Vérification dossier /profiles...");
+    if (!LittleFS.exists("/profiles")) {
+        Serial.println("❌ Dossier /profiles n'existe pas");
+        Serial.println("🔧 Création du dossier profiles...");
+        LittleFS.mkdir("/profiles");
+    } else {
+        Serial.println("✅ Dossier /profiles existe");
+    }
+    
+    // 2. Lister tous les profils disponibles
+    Serial.println("\n📋 Profils disponibles:");
+    File root = LittleFS.open("/profiles");
+    if (root && root.isDirectory()) {
+        File file = root.openNextFile();
+        int profileCount = 0;
+        while (file) {
+            if (file.isDirectory()) {
+                String profileName = file.name();
+                profileCount++;
+                Serial.printf("  %d. %s\n", profileCount, profileName.c_str());
+                
+                // Vérifier les fichiers du profil
+                String generalPath = "/profiles/" + profileName + "/general.json";
+                String tempPath = "/profiles/" + profileName + "/temperature.bin";
+                
+                Serial.printf("     - general.json: %s", LittleFS.exists(generalPath) ? "✅" : "❌");
+                if (LittleFS.exists(generalPath)) {
+                    File genFile = LittleFS.open(generalPath, "r");
+                    Serial.printf(" (%d bytes)", genFile.size());
+                    genFile.close();
+                }
+                Serial.println();
+                
+                Serial.printf("     - temperature.bin: %s", LittleFS.exists(tempPath) ? "✅" : "❌");
+                if (LittleFS.exists(tempPath)) {
+                    File tempFile = LittleFS.open(tempPath, "r");
+                    Serial.printf(" (%d bytes, %d jours)", tempFile.size(), tempFile.size() / (24 * sizeof(float)));
+                    tempFile.close();
+                }
+                Serial.println();
+            }
+            file = root.openNextFile();
+        }
+        root.close();
+        
+        if (profileCount == 0) {
+            Serial.println("  ❌ Aucun profil trouvé");
+        }
+    } else {
+        Serial.println("❌ Impossible d'ouvrir le dossier /profiles");
+    }
+    
+    // 3. Vérifier le profil actuel dans config
+    Serial.println("\n🎯 Configuration actuelle:");
+    Serial.printf("  - Profil actuel: '%s'\n", config.currentProfileName.c_str());
+    Serial.printf("  - Longueur nom: %d caractères\n", config.currentProfileName.length());
+    
+    // 4. Essayer de charger le profil actuel
+    String currentProfilePath = "/profiles/" + config.currentProfileName + "/general.json";
+    Serial.printf("\n📖 Tentative de lecture: %s\n", currentProfilePath.c_str());
+    
+    if (LittleFS.exists(currentProfilePath)) {
+        Serial.println("✅ Fichier general.json trouvé");
+        
+        File file = LittleFS.open(currentProfilePath, "r");
+        if (file) {
+            Serial.printf("✅ Fichier ouvert (%d bytes)\n", file.size());
+            
+            // Lire le contenu JSON
+            String jsonContent = file.readString();
+            file.close();
+            
+            Serial.println("📄 Contenu JSON:");
+            Serial.println(jsonContent.substring(0, 500) + (jsonContent.length() > 500 ? "..." : ""));
+            
+            // Essayer de parser le JSON
+            DynamicJsonDocument doc(2048);
+            DeserializationError error = deserializeJson(doc, jsonContent);
+            
+            if (error) {
+                Serial.printf("❌ Erreur parsing JSON: %s\n", error.c_str());
+            } else {
+                Serial.println("✅ JSON parsé avec succès");
+                
+                // Afficher les paramètres principaux
+                Serial.println("\n⚙️ Paramètres du profil:");
+                if (doc.containsKey("name")) Serial.printf("  - Nom: %s\n", doc["name"].as<String>().c_str());
+                if (doc.containsKey("usePWM")) Serial.printf("  - Mode PWM: %s\n", doc["usePWM"].as<bool>() ? "ON" : "OFF");
+                if (doc.containsKey("Kp")) Serial.printf("  - PID Kp: %.2f\n", doc["Kp"].as<float>());
+                if (doc.containsKey("Ki")) Serial.printf("  - PID Ki: %.2f\n", doc["Ki"].as<float>());
+                if (doc.containsKey("Kd")) Serial.printf("  - PID Kd: %.2f\n", doc["Kd"].as<float>());
+                if (doc.containsKey("globalMinTempSet")) Serial.printf("  - Temp min: %.1f°C\n", doc["globalMinTempSet"].as<float>());
+                if (doc.containsKey("globalMaxTempSet")) Serial.printf("  - Temp max: %.1f°C\n", doc["globalMaxTempSet"].as<float>());
+                
+                // Afficher la courbe 24h si présente
+                if (doc.containsKey("tempCurve") && doc["tempCurve"].is<JsonArray>()) {
+                    JsonArray tempArray = doc["tempCurve"];
+                    Serial.printf("  - Courbe 24h: %d points\n", tempArray.size());
+                    
+                    Serial.println("\n🌡️ Températures programmées pour aujourd'hui:");
+                    Serial.println("     Heure | Temp°C");
+                    Serial.println("     ------|-------");
+                    
+                    for (int i = 0; i < tempArray.size() && i < 24; i++) {
+                        float temp = tempArray[i].as<float>();
+                        Serial.printf("     %02dh   | %5.1f\n", i, temp);
+                    }
+                } else {
+                    Serial.println("  ❌ Pas de courbe tempCurve trouvée");
+                }
+            }
+        } else {
+            Serial.println("❌ Impossible d'ouvrir le fichier");
+        }
+    } else {
+        Serial.println("❌ Fichier general.json non trouvé");
+        Serial.println("🔧 Le profil par défaut sera créé...");
+    }
+    
+    // 5. Vérifier les données saisonnières si disponibles
+    String tempBinPath = "/profiles/" + config.currentProfileName + "/temperature.bin";
+    Serial.printf("\n📊 Vérification temperature.bin: %s\n", tempBinPath.c_str());
+    
+    if (LittleFS.exists(tempBinPath)) {
+        File tempFile = LittleFS.open(tempBinPath, "r");
+        if (tempFile) {
+            size_t fileSize = tempFile.size();
+            size_t expectedSize = 366 * 24 * sizeof(float);
+            
+            Serial.printf("✅ Fichier trouvé: %d bytes (attendu: %d)\n", fileSize, expectedSize);
+            
+            if (fileSize == expectedSize) {
+                Serial.println("✅ Taille correcte pour 366 jours x 24h");
+                
+                // Lire quelques exemples de données
+                float testTemps[24];
+                int testDay = 100; // Jour 100 de l'année
+                
+                size_t offset = testDay * 24 * sizeof(float);
+                if (tempFile.seek(offset)) {
+                    size_t bytesRead = tempFile.read((uint8_t*)testTemps, 24 * sizeof(float));
+                    if (bytesRead == 24 * sizeof(float)) {
+                        Serial.printf("📅 Exemple - Jour %d de l'année:\n", testDay + 1);
+                        Serial.println("     Heure | Temp°C");
+                        Serial.println("     ------|-------");
+                        
+                        for (int h = 0; h < 24; h += 4) { // Afficher toutes les 4h
+                            Serial.printf("     %02dh   | %5.1f\n", h, testTemps[h]);
+                        }
+                    } else {
+                        Serial.println("❌ Erreur lecture données de test");
+                    }
+                } else {
+                    Serial.println("❌ Erreur positionnement dans le fichier");
+                }
+            } else {
+                Serial.println("⚠️ Taille de fichier incorrecte");
+            }
+            
+            tempFile.close();
+        } else {
+            Serial.println("❌ Impossible d'ouvrir temperature.bin");
+        }
+    } else {
+        Serial.println("❌ temperature.bin non trouvé");
+    }
+    
+    // 6. Résumé de l'état
+    Serial.println("\n📋 RÉSUMÉ DU DIAGNOSTIC:");
+    Serial.printf("  - Profil configuré: %s\n", config.currentProfileName.c_str());
+    Serial.printf("  - general.json: %s\n", LittleFS.exists(currentProfilePath) ? "✅ OK" : "❌ MANQUANT");
+    Serial.printf("  - temperature.bin: %s\n", LittleFS.exists(tempBinPath) ? "✅ OK" : "❌ MANQUANT");
+    
+    Serial.println(String('=', 50));
+    Serial.println("🔍 FIN DU DIAGNOSTIC");
+    Serial.println(String('=', 50) + "\n");
+}
+
+
+void core1LogicTask(void *pvParameters) {
+    Serial.println("✅ Tâche applicative démarrée sur le Core 1.");
+    // === ENREGISTRER CETTE TÂCHE AUPRÈS DU WATCHDOG ===
+    esp_task_wdt_add(NULL);  // Ajouter la tâche actuelle au watchdog
+
+    for (;;) {
+        esp_task_wdt_reset();
+
+        static unsigned long lastSensorUpdate = 0;
+        static unsigned long lastDisplayUpdate = 0;
+        static unsigned long lastPageChange = 0;
+        unsigned long now = millis();
+
+        // === PRIORITÉ 1 : LECTURE CAPTEURS (critique) ===
+        if (now - lastSensorUpdate >= 2000) {
+            lastSensorUpdate = now;
+            updateInternalSensor(); // Utilise maintenant readSensorWithPriority()
+            if (!isnan(internalTemp)) {
+                controlHeater(internalTemp);
+            }
+        }
+
+        // === PRIORITÉ 2 : SAUVEGARDE CONFIG ===
+        if (savePending && (now - lastSaveRequest >= saveDelay)) {
+            savePending = false;
+            saveConfigIfChanged();
+        }
+
+        // === PRIORITÉ 3 : AFFICHAGE (moins critique) ===
+        if (now - lastDisplayUpdate >= 5000) {
+            lastDisplayUpdate = now;
+            if (safety.currentLevel == SAFETY_NORMAL) {
+                // Tentative non-bloquante de mise à jour écran
+                renderOLEDPageSafe(displayPage, 0);
+            }
+        }
+        
+        // === PRIORITÉ 4 : CHANGEMENT DE PAGE ===
+        if (now - lastPageChange >= 15000) {
+            lastPageChange = now;
+            if (safety.currentLevel == SAFETY_NORMAL) {
+                displayPage = (displayPage + 1) % pageCount;
+                // La nouvelle page sera affichée au prochain cycle d'affichage
+            }
+        }
+
+        // Pause pour éviter de monopoliser le CPU
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+    delay(2000);
+    Serial.println("\n=== Démarrage du système de contrôle de température ===");
+    
+    startCamera();
+    delay(400);
+    testCameraSpeed();
+    // === Configuration des LEDs ===
+    pixels.begin();
+    pixels.show(); // Initialisation, la LED est éteinte
+
+    // === Initialisation des préférences ===
+    if (!preferences.begin("system", false)) {
+        Serial.println("❌ Échec d'initialisation des préférences !");
+    } else {
+        Serial.println("✅ Préférences initialisées");
+        loadCompleteConfig();  // La configuration est chargée ici
+    }
+
+    // Maintenant, appliquer l'état de la LED depuis la configuration chargée
+    pixels.setBrightness(config.ledBrightness);
+    if (config.ledState) {
+      pixels.setPixelColor(0, pixels.Color(config.ledRed, config.ledGreen, config.ledBlue));
+    } else {
+      pixels.setPixelColor(0, pixels.Color(0, 0, 0));
+    }
+    pixels.show();
+
+    // === LittleFS ===
+    if (!LittleFS.begin(true)) {
+        Serial.println("❌ LittleFS mount failed");
+    } else {
+        Serial.println("✅ LittleFS mount OK");
+    }
+
+// ✅ S'assurer que le système de profils existe
+    if (!LittleFS.exists("/profiles")) {
+        LittleFS.mkdir("/profiles");
+        Serial.println("📁 Création du dossier profil...");
+    }
+    
+    if (!LittleFS.exists("/profiles/default")) {
+        Serial.println("📁 Création du profil par défaut...");
+        createDefaultProfile();
+    }
+    
+    // ✅ S'assurer qu'un profil est défini
+    if (config.currentProfileName.length() == 0) {
+        config.currentProfileName = "default"; // ✅ Assignation String directe
+        Serial.println("📁 Profile=0 Création du profil default...");
+    }
+    
+    Serial.printf("✅ Profil actuel: %s\n", config.currentProfileName);
+    diagnosticProfile();
+
+
+    // === WiFi ===
+    Serial.print("Connexion au réseau WiFi...");
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("\n✅ Connecté! IP: " + WiFi.localIP().toString());
+
+// === Initialisation du mutex I2C ===
+    i2cMutex = xSemaphoreCreateMutex();
+    if (i2cMutex == NULL) {
+        Serial.println("❌ Échec création mutex I2C");
+        while(1); // Arrêt critique
+    }
+
+
+    // === Capteurs et périphériques ===
+    Wire.begin(I2C_SDA, I2C_SCL);
+    pinMode(HEATER_PIN, OUTPUT);
+    analogWrite(HEATER_PIN, 10);
+    delay(500);
+    analogWrite(HEATER_PIN, 0);
+
+    if (!sht31.begin(0x44)) {
+        Serial.println("❌ Capteur SHT30 non trouvé !");
+        while (true);
+    }
+
+    // === OLED ===
+    if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+        Serial.println("❌ Échec d'initialisation OLED");
+        while (true);
+    }
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.drawBitmap(positionImageAxeHorizontal, positionImageAxeVertical, logo, largeurDeLimage, hauteurDeLimage, WHITE);
+    display.display();
+
+    // === PID ===
+    myPID.SetMode(AUTOMATIC);
+    myPID.SetOutputLimits(0, 255);
+    myPID.SetTunings(config.Kp, config.Ki, config.Kd);
+
+    // === NTP ===
+    configTime(gmtOffset_sec, daylightOffset_sec, "pool.ntp.org", "time.nist.gov");
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+        ExternalWeather ext = getWeatherData();
+        if (!isnan(ext.temperature)) externalTemp = ext.temperature;
+        if (!isnan(ext.humidity)) externalHum = ext.humidity;
+        Serial.println(&timeinfo, "Date : %A, %d %B %Y - %H:%M:%S");
+    } else {
+        Serial.println("❌ Impossible d'obtenir l'heure");
+    }
+
+    // Watchdog
+    esp_task_wdt_init(30, true);
+
+
+    // === ROUTES HTTP ===
+    // Fichiers statiques
+    server.serveStatic("/css/", LittleFS, "/css/").setCacheControl("max-age=86400");
+    server.serveStatic("/js/", LittleFS, "/js/");
+    server.serveStatic("/images/", LittleFS, "/images/").setDefaultFile("favico.ico");
+
+    // Page d'accueil
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+            request->send(LittleFS, "/index.html", "text/html");
+        });
+    
+        // Qualité cam
+    
+    server.on("/saveConfig", HTTP_GET, handleSaveConfiguration);
+    server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request) {
+        StaticJsonDocument<256> doc;
+        doc["heaterState"] = output ;
+        doc["currentMode"] = config.usePWM ? "PWM" : "ON/OFF";
+        doc["consigne"] = config.setpoint;
+        doc["usePWM"] = config.usePWM;
+        doc["Kp"] = config.Kp;
+        doc["Ki"] = config.Ki;
+        doc["Kd"] = config.Kd;
+        doc["hysteresis"] = config.hysteresis;
+        String json;
+        serializeJson(doc, json);
+        request->send(200, "application/json", json);
+    });
+
+server.on("/setDebugMode", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (request->hasParam("enabled")) {
+        String val = request->getParam("enabled")->value();
+        config.debugModeEnabled = (val == "1" || val == "true");
+        requestConfigSave();
+        String msg = String("Debug mode ") + (config.debugModeEnabled ? "enabled" : "disabled");
+        DEBUG_LOG("Debug mode set to %d", config.debugModeEnabled);
+        request->send(200, "text/plain", msg);
+    } else {
+        request->send(400, "text/plain", "Missing 'enabled' parameter");
+    }
+});
+
+server.on("/getSeasonalMode", HTTP_GET, [](AsyncWebServerRequest *request) {
+    DynamicJsonDocument doc(256);
+    doc["seasonalModeEnabled"] = config.seasonalModeEnabled;
+    String out;
+    serializeJson(doc, out);
+    DEBUG_LOG("GET /getSeasonalMode: %d", config.seasonalModeEnabled);
+    request->send(200, "application/json", out);
+});
+
+server.on("/setSeasonalMode", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (request->hasParam("enabled", true)) {
+        bool enabled = request->getParam("enabled", true)->value().toInt() == 1;
+        config.seasonalModeEnabled = enabled;
+        requestConfigSave();
+        DEBUG_LOG("Seasonal mode set to %d", enabled);
+        request->send(200, "text/plain", String("Seasonal mode ") + (enabled ? "enabled" : "disabled"));
+    } else {
+        request->send(400, "text/plain", "Missing 'enabled' param");
+    }
+});
+
+// ✅ ENDPOINT pour récupérer toutes les données de l'année (heatmap)
+server.on("/getYearlyTemperatures", HTTP_GET, [](AsyncWebServerRequest *request) {
+    String profilePath = "/profiles/" + String(config.currentProfileName) + "/temperature.bin";
+    
+    if (!LittleFS.exists(profilePath)) {
+        profilePath = "/profiles/default/temperature.bin";
+        if (!LittleFS.exists(profilePath)) {
+            createDefaultTemperatureBin();
+        }
+    }
+    
+    File file = LittleFS.open(profilePath, "r");
+    if (!file) {
+        request->send(500, "text/plain", "Erreur lecture temperature.bin");
+        return;
+    }
+    
+    // Créer un JSON avec les moyennes journalières
+    DynamicJsonDocument doc(8192); // Plus grand pour 366 jours
+    JsonArray yearData = doc.createNestedArray("yearlyAverages");
+    
+    float dayTemps[24];
+    for (int day = 0; day < 366; day++) {
+        size_t bytesRead = file.read((uint8_t*)dayTemps, 24 * sizeof(float));
+        if (bytesRead == 24 * sizeof(float)) {
+            // Calculer la moyenne du jour
+            float sum = 0;
+            for (int i = 0; i < 24; i++) {
+                sum += dayTemps[i];
+            }
+            yearData.add(sum / 24.0);
+        } else {
+            yearData.add(22.0); // Valeur par défaut
+        }
+    }
+    
+    file.close();
+    
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+});
+
+// ✅ ENDPOINT pour sauvegarder les modifications d'un jour
+server.on("/saveDayData", HTTP_POST, [](AsyncWebServerRequest *req){}, NULL,
+[](AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
+    if (!request->hasParam("day")) {
+        request->send(400, "text/plain", "Paramètre 'day' manquant");
+        return;
+    }
+    
+    int dayIndex = request->getParam("day")->value().toInt();
+    
+    // Parser le JSON avec les 24 températures
+    DynamicJsonDocument doc(1024);
+    if (deserializeJson(doc, data, len) != DeserializationError::Ok) {
+        request->send(400, "text/plain", "JSON invalide");
+        return;
+    }
+    
+    if (!doc.is<JsonArray>() || doc.size() != 24) {
+        request->send(400, "text/plain", "24 températures attendues");
+        return;
+    }
+    
+    // Convertir en tableau de float
+    float dayTemperatures[24];
+    for (int i = 0; i < 24; i++) {
+        dayTemperatures[i] = doc[i].as<float>();
+    }
+    
+    // Sauvegarder dans le profil actuel
+    String profilePath = "/profiles/" + String(config.currentProfileName) + "/temperature.bin";
+    
+    if (saveDayToTemperatureBin(profilePath, dayIndex, dayTemperatures)) {
+        request->send(200, "text/plain", "Jour sauvegardé");
+    } else {
+        request->send(500, "text/plain", "Erreur de sauvegarde");
+    }
+});
+
+server.on("/getDayData", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (!request->hasParam("day")) {
+        request->send(400, "text/plain", "Paramètre 'day' manquant");
+        return;
+    }
+    
+    int dayIndex = request->getParam("day")->value().toInt();
+    if (dayIndex < 0 || dayIndex >= 366) {
+        request->send(400, "text/plain", "Jour invalide (0-365)");
+        return;
+    }
+    
+    // Utiliser le profil actuel ou "default"
+    String profilePath = "/profiles/" + String(config.currentProfileName) + "/temperature.bin";
+    
+    // Si le profil actuel n'existe pas, utiliser "default"
+    if (!LittleFS.exists(profilePath)) {
+        profilePath = "/profiles/default/temperature.bin";
+        
+        // Si même "default" n'existe pas, créer des données par défaut
+        if (!LittleFS.exists(profilePath)) {
+            Serial.println("❌ Aucun fichier temperature.bin trouvé, génération de données par défaut");
+            createDefaultTemperatureBin();
+        }
+    }
+    
+    // Lire les 24 températures pour ce jour
+    float dayTemperatures[24];
+    if (readDayFromTemperatureBin(profilePath, dayIndex, dayTemperatures)) {
+        // Convertir en JSON
+        StaticJsonDocument<1024> doc;
+        JsonArray temps = doc.createNestedArray("temperatures");
+        
+        for (int i = 0; i < 24; i++) {
+            temps.add(dayTemperatures[i]);
+        }
+        
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    } else {
+        request->send(500, "text/plain", "Erreur de lecture du fichier temperature.bin");
+    }
+});
+
+server.on("/getCurrentConfig", HTTP_GET, [](AsyncWebServerRequest *request) {
+    StaticJsonDocument<2048> doc;
+    
+    // Paramètres float inchangés
+    doc["hysteresis"] = config.hysteresis;
+    doc["Kp"] = config.Kp;
+    doc["Ki"] = config.Ki;
+    doc["Kd"] = config.Kd;
+    doc["latitude"] = config.latitude;
+    doc["longitude"] = config.longitude;
+    
+    // ✅ Conversions int16 → float pour JSON
+    doc["setpoint"] = config.getSetpointDouble();
+    doc["globalMinTempSet"] = config.getMinTempFloat();
+    doc["globalMaxTempSet"] = config.getMaxTempFloat();
+    
+    JsonArray curve = doc.createNestedArray("tempCurve");
+    for (int i = 0; i < TEMP_CURVE_POINTS; i++) {
+        curve.add(config.getTempCurve(i));
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+});
+
+    server.on("/listFiles", HTTP_GET, [](AsyncWebServerRequest *request){
+        String output = "Fichiers LittleFS:\n";
+        File root = LittleFS.open("/");
+        File file = root.openNextFile();
+        while (file) {
+            output += String(file.name()) + " (" + file.size() + " bytes)\n";
+            file = root.openNextFile();
+        }
+        request->send(200, "text/plain", output);
+    });
+
+// ✅ Lister tous les profils disponibles
+server.on("/listProfiles", HTTP_GET, [](AsyncWebServerRequest *request) {
+    DynamicJsonDocument doc(2048);
+    JsonArray profiles = doc.createNestedArray("profiles");
+    
+    File root = LittleFS.open("/profiles");
+    if (!root || !root.isDirectory()) {
+        // Créer le dossier profiles s'il n'existe pas
+        LittleFS.mkdir("/profiles");
+        createDefaultProfile();
+        root = LittleFS.open("/profiles");
+    }
+    
+    File file = root.openNextFile();
+    while (file) {
+        if (file.isDirectory()) {
+            String profileName = file.name();
+            
+            // Vérifier que le profil a les fichiers nécessaires
+            String generalPath = "/profiles/" + profileName + "/general.json";
+            String tempPath = "/profiles/" + profileName + "/temperature.bin";
+            
+            if (LittleFS.exists(generalPath)) {
+                JsonObject profile = profiles.createNestedObject();
+                profile["name"] = profileName;
+                profile["hasGeneral"] = true;
+                profile["hasTempData"] = LittleFS.exists(tempPath);
+                
+                // Informations sur la taille
+                if (LittleFS.exists(generalPath)) {
+                    File genFile = LittleFS.open(generalPath, "r");
+                    profile["generalSize"] = genFile.size();
+                    genFile.close();
+                }
+                
+                if (LittleFS.exists(tempPath)) {
+                    File tempFile = LittleFS.open(tempPath, "r");
+                    profile["tempSize"] = tempFile.size();
+                    tempFile.close();
+                }
+            }
+        }
+        file = root.openNextFile();
+    }
+    root.close();
+    
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+});
+
+// ✅ Charger un profil et l'appliquer à config
+server.on("/loadProfile", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (!request->hasParam("name")) {
+        request->send(400, "text/plain", "Paramètre 'name' manquant");
+        return;
+    }
+    
+    String profileName = request->getParam("name")->value();
+    String generalPath = "/profiles/" + profileName + "/general.json";
+    
+    if (!LittleFS.exists(generalPath)) {
+        request->send(404, "text/plain", "Profil non trouvé");
+        return;
+    }
+    
+    File file = LittleFS.open(generalPath, "r");
+    if (!file) {
+        request->send(500, "text/plain", "Erreur lecture profil");
+        return;
+    }
+    
+    DynamicJsonDocument doc(2048);
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    
+    if (error) {
+        request->send(500, "text/plain", "JSON invalide dans le profil");
+        return;
+    }
+    
+    // ✅ APPLIQUER à votre structure SystemConfig
+    if (doc.containsKey("usePWM")) config.usePWM = doc["usePWM"];
+    if (doc.containsKey("weatherModeEnabled")) config.weatherModeEnabled = doc["weatherModeEnabled"];
+    if (doc.containsKey("cameraEnabled")) config.cameraEnabled = doc["cameraEnabled"];
+    if (doc.containsKey("cameraResolution")) config.cameraResolution = doc["cameraResolution"].as<String>();
+    if (doc.containsKey("useTempCurve")) config.useTempCurve = doc["useTempCurve"];
+    if (doc.containsKey("useLimitTemp")) config.useLimitTemp = doc["useLimitTemp"];
+    
+    // Paramètres PID
+    if (doc.containsKey("hysteresis")) config.hysteresis = doc["hysteresis"];
+    if (doc.containsKey("Kp")) config.Kp = doc["Kp"];
+    if (doc.containsKey("Ki")) config.Ki = doc["Ki"];
+    if (doc.containsKey("Kd")) config.Kd = doc["Kd"];
+    if (doc.containsKey("setpoint")) config.setpoint = doc["setpoint"];
+    
+    // Géolocalisation
+    if (doc.containsKey("latitude")) config.latitude = doc["latitude"];
+    if (doc.containsKey("longitude")) config.longitude = doc["longitude"];
+    if (doc.containsKey("DST_offset")) config.DST_offset = doc["DST_offset"];
+    
+    // Limites de température
+    if (doc.containsKey("globalMinTempSet")) config.globalMinTempSet = doc["globalMinTempSet"];
+    if (doc.containsKey("globalMaxTempSet")) config.globalMaxTempSet = doc["globalMaxTempSet"];
+    
+    // Courbe de température
+    if (doc.containsKey("tempCurve") && doc["tempCurve"].is<JsonArray>()) {
+        JsonArray tempArray = doc["tempCurve"];
+        for (int i = 0; i < TEMP_CURVE_POINTS && i < tempArray.size(); i++) {
+            config.tempCurve[i] = tempArray[i].as<float>();
+        }
+    }
+    
+    // LED
+    if (doc.containsKey("ledState")) config.ledState = doc["ledState"];
+    if (doc.containsKey("ledBrightness")) config.ledBrightness = doc["ledBrightness"];
+    if (doc.containsKey("ledRed")) config.ledRed = doc["ledRed"];
+    if (doc.containsKey("ledGreen")) config.ledGreen = doc["ledGreen"];
+    if (doc.containsKey("ledBlue")) config.ledBlue = doc["ledBlue"];
+    
+    // Métadonnées
+    if (doc.containsKey("seasonalModeEnabled")) config.seasonalModeEnabled = doc["seasonalModeEnabled"];
+    if (doc.containsKey("debugModeEnabled")) config.debugModeEnabled = doc["debugModeEnabled"];
+    
+    // ✅ Mettre à jour le profil actuel DANS VOTRE STRUCTURE
+    config.currentProfileName = profileName;
+    
+    // Appliquer immédiatement les changements PID
+    myPID.SetTunings(config.Kp, config.Ki, config.Kd);
+    
+    // Appliquer immédiatement l'état de la LED
+    pixels.setBrightness(config.ledBrightness);
+    if (config.ledState) {
+        pixels.setPixelColor(0, pixels.Color(config.ledRed, config.ledGreen, config.ledBlue));
+    } else {
+        pixels.setPixelColor(0, pixels.Color(0, 0, 0));
+    }
+    pixels.show();
+    
+    // Sauvegarder la nouvelle configuration
+    requestConfigSave();
+    
+    Serial.printf("✅ Profil '%s' chargé et appliqué\n", profileName.c_str());
+    
+    // Retourner la configuration complète au frontend
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+});
+
+// ✅ Sauvegarder un profil complet
+server.on("/saveProfile", HTTP_POST, [](AsyncWebServerRequest *req){}, NULL,
+[](AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
+    DynamicJsonDocument doc(4096);
+    if (deserializeJson(doc, data, len) != DeserializationError::Ok) {
+        request->send(400, "text/plain", "JSON invalide");
+        return;
+    }
+    
+    String profileName;
+    if (doc.containsKey("name")) {
+        profileName = doc["name"].as<String>();
+    } else {
+        profileName = config.currentProfileName; // Utiliser le profil actuel
+    }
+    
+    // Nettoyer le nom du profil
+    profileName.replace("/", "_");
+    profileName.replace("\\", "_");
+    profileName.replace(".", "_");
+    
+    String profileDir = "/profiles/" + profileName;
+    String generalPath = profileDir + "/general.json";
+    String tempPath = profileDir + "/temperature.bin";
+    
+    // Créer le dossier du profil
+    if (!LittleFS.exists(profileDir)) {
+        if (!LittleFS.mkdir(profileDir)) {
+            request->send(500, "text/plain", "Impossible de créer le dossier profil");
+            return;
+        }
+        Serial.printf("✅ Dossier profil créé: %s\n", profileDir.c_str());
+    }
+    
+    // ✅ SAUVEGARDER general.json depuis VOTRE STRUCTURE
+    File generalFile = LittleFS.open(generalPath, "w");
+    if (!generalFile) {
+        request->send(500, "text/plain", "Erreur création general.json");
+        return;
+    }
+    
+    StaticJsonDocument<2048> generalDoc;
+    generalDoc["name"] = profileName;
+    generalDoc["timestamp"] = String(millis()); // Ou utiliser une vraie timestamp
+    generalDoc["version"] = "2.0";
+    generalDoc["profileType"] = config.seasonalModeEnabled ? "saisonnier" : "journalier";
+    
+    // ✅ Paramètres depuis VOTRE SystemConfig
+    generalDoc["usePWM"] = config.usePWM;
+    generalDoc["weatherModeEnabled"] = config.weatherModeEnabled;
+    generalDoc["cameraEnabled"] = config.cameraEnabled;
+    generalDoc["cameraResolution"] = config.cameraResolution;
+    generalDoc["useTempCurve"] = config.useTempCurve;
+    generalDoc["useLimitTemp"] = config.useLimitTemp;
+    
+    // Paramètres PID
+    generalDoc["hysteresis"] = config.hysteresis;
+    generalDoc["Kp"] = config.Kp;
+    generalDoc["Ki"] = config.Ki;
+    generalDoc["Kd"] = config.Kd;
+    generalDoc["setpoint"] = config.setpoint;
+    
+    // Géolocalisation
+    generalDoc["latitude"] = config.latitude;
+    generalDoc["longitude"] = config.longitude;
+    generalDoc["DST_offset"] = config.DST_offset;
+    
+    // Limites
+    generalDoc["globalMinTempSet"] = config.globalMinTempSet;
+    generalDoc["globalMaxTempSet"] = config.globalMaxTempSet;
+    
+    // ✅ Courbe depuis VOTRE tempCurve[TEMP_CURVE_POINTS]
+    JsonArray tempArray = generalDoc.createNestedArray("tempCurve");
+    for (int i = 0; i < TEMP_CURVE_POINTS; i++) {
+        tempArray.add(config.tempCurve[i]);
+    }
+    
+    // LED
+    generalDoc["ledState"] = config.ledState;
+    generalDoc["ledBrightness"] = config.ledBrightness;
+    generalDoc["ledRed"] = config.ledRed;
+    generalDoc["ledGreen"] = config.ledGreen;
+    generalDoc["ledBlue"] = config.ledBlue;
+    
+    // Métadonnées
+    generalDoc["configVersion"] = config.configVersion;
+    generalDoc["seasonalModeEnabled"] = config.seasonalModeEnabled;
+    generalDoc["debugModeEnabled"] = config.debugModeEnabled;
+    
+    // Sauvegarder general.json
+    serializeJson(generalDoc, generalFile);
+    generalFile.close();
+    
+    // ✅ SAUVEGARDER temperature.bin (données saisonnières si fournies par le frontend)
+    if (doc.containsKey("seasonalData") && doc["seasonalData"].is<JsonArray>()) {
+        JsonArray seasonalArray = doc["seasonalData"];
+        
+        if (seasonalArray.size() == 366) {
+            File tempFile = LittleFS.open(tempPath, "w");
+            if (tempFile) {
+                float dayTemps[24];
+                
+                for (int day = 0; day < 366; day++) {
+                    if (day < seasonalArray.size() && seasonalArray[day].is<JsonArray>()) {
+                        JsonArray dayArray = seasonalArray[day];
+                        
+                        for (int hour = 0; hour < 24; hour++) {
+                            if (hour < dayArray.size()) {
+                                dayTemps[hour] = dayArray[hour].as<float>();
+                            } else {
+                                dayTemps[hour] = config.tempCurve[hour % TEMP_CURVE_POINTS]; // Utiliser votre courbe par défaut
+                            }
+                        }
+                    } else {
+                        // Générer des données par défaut basées sur votre tempCurve
+                        for (int hour = 0; hour < 24; hour++) {
+                            float baseTemp = config.tempCurve[hour % TEMP_CURVE_POINTS];
+                            // Variation saisonnière
+                            float seasonalVariation = 3.0 * sin((day / 366.0) * 2.0 * PI - PI/2);
+                            dayTemps[hour] = baseTemp + seasonalVariation;
+                        }
+                    }
+                    
+                    // Écrire les 24 températures de ce jour
+                    tempFile.write((uint8_t*)dayTemps, 24 * sizeof(float));
+                }
+                
+                tempFile.close();
+                Serial.printf("✅ Données saisonnières sauvegardées: %s\n", tempPath.c_str());
+            }
+        }
+    } else {
+        // Créer temperature.bin basé sur votre tempCurve actuelle
+        createTemperatureBinFromCurrentCurve(profileName);
+    }
+    
+    // ✅ Mettre à jour VOTRE currentProfileName
+    config.currentProfileName = profileName;
+    requestConfigSave();
+    
+    Serial.printf("✅ Profil '%s' sauvegardé depuis la configuration actuelle\n", profileName.c_str());
+    request->send(200, "text/plain", "Profil sauvegardé avec succès");
+});
+
+// ✅ Supprimer un profil
+server.on("/deleteProfile", HTTP_DELETE, [](AsyncWebServerRequest *request) {
+    if (!request->hasParam("name")) {
+        request->send(400, "text/plain", "Paramètre 'name' manquant");
+        return;
+    }
+    
+    String profileName = request->getParam("name")->value();
+    
+    if (profileName == "default") {
+        request->send(400, "text/plain", "Impossible de supprimer le profil par défaut");
+        return;
+    }
+    
+    String profileDir = "/profiles/" + profileName;
+    
+    // Supprimer les fichiers du profil
+    String generalPath = profileDir + "/general.json";
+    String tempPath = profileDir + "/temperature.bin";
+    
+    if (LittleFS.exists(generalPath)) LittleFS.remove(generalPath);
+    if (LittleFS.exists(tempPath)) LittleFS.remove(tempPath);
+    
+    // Supprimer le dossier (si vide)
+    LittleFS.rmdir(profileDir);
+    
+    // Si c'était le profil actuel, revenir à "default"
+    if (config.currentProfileName == profileName) {
+            config.currentProfileName = "default";
+            requestConfigSave();
+        }
+    
+    Serial.printf("✅ Profil '%s' supprimé\n", profileName.c_str());
+    request->send(200, "text/plain", "Profil supprimé");
+});
+
+// ✅ Renommer un profil
+server.on("/renameProfile", HTTP_POST, [](AsyncWebServerRequest *request) {
+    if (!request->hasParam("from") || !request->hasParam("to")) {
+        request->send(400, "text/plain", "Paramètres 'from' et 'to' requis");
+        return;
+    }
+    
+    String oldName = request->getParam("from")->value();
+    String newName = request->getParam("to")->value();
+    
+    if (oldName == "default") {
+        request->send(400, "text/plain", "Impossible de renommer le profil par défaut");
+        return;
+    }
+    
+    String oldDir = "/profiles/" + oldName;
+    String newDir = "/profiles/" + newName;
+    
+    if (!LittleFS.exists(oldDir) || LittleFS.exists(newDir)) {
+        request->send(400, "text/plain", "Profil source inexistant ou destination existe déjà");
+        return;
+    }
+    
+    // Créer le nouveau dossier
+    LittleFS.mkdir(newDir);
+    
+    // Copier les fichiers
+    File oldGeneral = LittleFS.open(oldDir + "/general.json", "r");
+    File newGeneral = LittleFS.open(newDir + "/general.json", "w");
+    if (oldGeneral && newGeneral) {
+        newGeneral.write(oldGeneral.read());
+        oldGeneral.close();
+        newGeneral.close();
+    }
+    
+    File oldTemp = LittleFS.open(oldDir + "/temperature.bin", "r");
+    File newTemp = LittleFS.open(newDir + "/temperature.bin", "w");
+    if (oldTemp && newTemp) {
+        uint8_t buffer[512];
+        while (oldTemp.available()) {
+            size_t bytesRead = oldTemp.read(buffer, sizeof(buffer));
+            newTemp.write(buffer, bytesRead);
+        }
+        oldTemp.close();
+        newTemp.close();
+    }
+    
+    // Supprimer l'ancien profil
+    LittleFS.remove(oldDir + "/general.json");
+    LittleFS.remove(oldDir + "/temperature.bin");
+    LittleFS.rmdir(oldDir);
+    
+    // Mettre à jour le profil actuel si nécessaire
+    if (config.currentProfileName == oldName) {
+            config.currentProfileName = newName;
+            requestConfigSave();
+        }
+    
+    Serial.printf("✅ Profil renommé: '%s' → '%s'\n", oldName.c_str(), newName.c_str());
+    request->send(200, "text/plain", "Profil renommé");
+});
+
+// ✅ Activer un profil
+server.on("/activateProfile", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (!request->hasParam("name")) {
+        request->send(400, "text/plain", "Paramètre 'name' manquant");
+        return;
+    }
+    
+    String profileName = request->getParam("name")->value();
+    String profilePath = "/profiles/" + profileName + "/general.json";
+    
+    if (!LittleFS.exists(profilePath)) {
+        request->send(404, "text/plain", "Profil non trouvé");
+        return;
+    }
+    
+    // Charger la configuration du profil
+    File file = LittleFS.open(profilePath, "r");
+    if (file) {
+        DynamicJsonDocument doc(2048);
+        if (deserializeJson(doc, file) == DeserializationError::Ok) {
+            // Appliquer la configuration à config actuel
+            if (doc.containsKey("usePWM")) config.usePWM = doc["usePWM"];
+            if (doc.containsKey("hysteresis")) config.hysteresis = doc["hysteresis"];
+            if (doc.containsKey("Kp")) config.Kp = doc["Kp"];
+            if (doc.containsKey("Ki")) config.Ki = doc["Ki"];
+            if (doc.containsKey("Kd")) config.Kd = doc["Kd"];
+            // ... appliquer tous les autres paramètres ...
+            
+            // Charger la courbe 24h
+            if (doc.containsKey("temperatures") && doc["temperatures"].is<JsonArray>()) {
+                JsonArray temps = doc["temperatures"];
+                for (int i = 0; i < TEMP_CURVE_POINTS && i < temps.size(); i++) {
+                    config.tempCurve[i] = temps[i].as<float>();
+                }
+            }
+        }
+        file.close();
+    }
+    
+    // Mettre à jour le profil actuel
+    config.currentProfileName = profileName;
+    requestConfigSave();
+    
+    Serial.printf("✅ Profil '%s' activé\n", profileName.c_str());
+    request->send(200, "text/plain", "Profil activé");
+});
+
+
+server.on("/setCurrentProfile", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (request->hasParam("name")) {
+        config.currentProfileName = request->getParam("name")->value();
+        requestConfigSave();
+        request->send(200, "text/plain", "Profil changé");
+    } else {
+        request->send(400, "text/plain", "Paramètre manquant");
+    }
+});
+
+
+// ✅ Modification de handleApplyAllSettings pour votre structure
+server.on("/applyAllSettings", HTTP_POST, [](AsyncWebServerRequest *req){}, NULL, 
+[](AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
+    DynamicJsonDocument doc(2048);
+    if (deserializeJson(doc, data, len) != DeserializationError::Ok) {
+        request->send(400, "text/plain", "JSON invalide");
+        return;
+    }
+
+    // ✅ Mise à jour directe de VOTRE structure SystemConfig
+    if (doc.containsKey("currentProfileName")) {
+        config.currentProfileName = doc["currentProfileName"].as<String>();
+    }
+    
+    if (doc.containsKey("usePWM")) config.usePWM = doc["usePWM"];
+    if (doc.containsKey("weatherModeEnabled")) config.weatherModeEnabled = doc["weatherModeEnabled"];
+    if (doc.containsKey("cameraEnabled")) config.cameraEnabled = doc["cameraEnabled"];
+    if (doc.containsKey("cameraResolution")) config.cameraResolution = doc["cameraResolution"].as<String>();
+    if (doc.containsKey("useTempCurve")) config.useTempCurve = doc["useTempCurve"];
+    if (doc.containsKey("useLimitTemp")) config.useLimitTemp = doc["useLimitTemp"];
+    
+    if (doc.containsKey("hysteresis")) config.hysteresis = doc["hysteresis"];
+    if (doc.containsKey("Kp")) config.Kp = doc["Kp"];
+    if (doc.containsKey("Ki")) config.Ki = doc["Ki"];
+    if (doc.containsKey("Kd")) config.Kd = doc["Kd"];
+    if (doc.containsKey("setpoint")) config.setpoint = doc["setpoint"];
+    
+    if (doc.containsKey("latitude")) config.latitude = doc["latitude"];
+    if (doc.containsKey("longitude")) config.longitude = doc["longitude"];
+    if (doc.containsKey("DST_offset")) config.DST_offset = doc["DST_offset"];
+    
+    if (doc.containsKey("globalMinTempSet")) config.globalMinTempSet = doc["globalMinTempSet"];
+    if (doc.containsKey("globalMaxTempSet")) config.globalMaxTempSet = doc["globalMaxTempSet"];
+    
+    // ✅ Courbe dans VOTRE tempCurve[TEMP_CURVE_POINTS] 
+    if (doc.containsKey("tempCurve") && doc["tempCurve"].is<JsonArray>()) {
+        JsonArray curve = doc["tempCurve"].as<JsonArray>();
+        for (int i = 0; i < TEMP_CURVE_POINTS && i < curve.size(); i++) {
+            config.tempCurve[i] = curve[i].as<float>();
+        }
+    }
+    
+    if (doc.containsKey("ledState")) config.ledState = doc["ledState"];
+    if (doc.containsKey("ledBrightness")) config.ledBrightness = doc["ledBrightness"];
+    if (doc.containsKey("ledRed")) config.ledRed = doc["ledRed"];
+    if (doc.containsKey("ledGreen")) config.ledGreen = doc["ledGreen"];
+    if (doc.containsKey("ledBlue")) config.ledBlue = doc["ledBlue"];
+    
+    if (doc.containsKey("seasonalModeEnabled")) config.seasonalModeEnabled = doc["seasonalModeEnabled"];
+    if (doc.containsKey("debugModeEnabled")) config.debugModeEnabled = doc["debugModeEnabled"];
+
+    // Appliquer immédiatement les changements
+    myPID.SetTunings(config.Kp, config.Ki, config.Kd);
+    
+    pixels.setBrightness(config.ledBrightness);
+    if (config.ledState) {
+        pixels.setPixelColor(0, pixels.Color(config.ledRed, config.ledGreen, config.ledBlue));
+    } else {
+        pixels.setPixelColor(0, pixels.Color(0, 0, 0));
+    }
+    pixels.show();
+    
+    requestConfigSave();
+
+    Serial.println("[CONF] ✔️ Paramètres appliqués selon SystemConfig");
+    request->send(200, "text/plain", "Paramètres appliqués et sauvegardés");
+});
+
+    server.on("/setPWMMode", HTTP_GET, handlePWMModeSetting);
+    server.on("/setHysteresis", HTTP_GET, handleHysteresisSetting);
+    server.on("/setPID", HTTP_GET, handlePIDSetting);
+    server.on("/setGlobalMaxTemp", HTTP_GET, handleGlobalTempSettings);
+    server.on("/setGlobalMinTemp", HTTP_GET, handleGlobalTempSettings);
+	server.on("/set-resolution-cam", HTTP_GET, handleResolutionSetting);
+    server.on("/setCamera", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (request->hasParam("enabled")) {
+            config.cameraEnabled = request->getParam("enabled")->value().toInt() == 1;
+            Serial.printf("[TEMP] Caméra: %s (non sauvegardé)\n", config.cameraEnabled ? "activée" : "désactivée");
+            request->send(200, "text/plain", "OK");
+        } else {
+            request->send(400, "text/plain", "Paramètre manquant");
+        }
+    });
+    
+    server.on("/setWeather", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (request->hasParam("lat") && request->hasParam("lon") && request->hasParam("enabled")) {
+            config.latitude = request->getParam("lat")->value().toFloat();
+            config.longitude = request->getParam("lon")->value().toFloat();
+            config.weatherModeEnabled = request->getParam("enabled")->value().toInt() == 1;
+            
+            Serial.printf("[TEMP] Météo: enabled=%s, lat=%.4f, lon=%.4f (non sauvegardé)\n", 
+                         config.weatherModeEnabled ? "true" : "false", config.latitude, config.longitude);
+            request->send(200, "text/plain", "OK");
+        } else {
+            request->send(400, "text/plain", "Paramètres manquants");
+        }
+    });
+
+    server.on("/setTempCurveMode", HTTP_GET, [](AsyncWebServerRequest *request) {
+        if (request->hasParam("enabled")) {
+            config.useTempCurve = request->getParam("enabled")->value() == "1";
+            Serial.printf("[TEMP] Mode courbe de température : %s (non sauvegardé)\n", 
+                         config.useTempCurve ? "activé" : "désactivé");
+            request->send(200, "text/plain", "OK");
+        } else {
+            request->send(400, "text/plain", "Paramètre manquant");
+        }
+    });
+    
+    server.on("/setLimitTemp", HTTP_GET, [](AsyncWebServerRequest *request) {
+        if (request->hasParam("enabled")) {
+            config.useLimitTemp = request->getParam("enabled")->value() == "1";
+            Serial.printf("Limite de température %s\n", 
+                         config.useLimitTemp ? "activé" : "désactivé");
+            request->send(200, "text/plain", "OK");
+        } else {
+            request->send(400, "text/plain", "Paramètre manquant");
+        }
+    });
+    // === ROUTES DE LECTURE ===
+    server.on("/getSettings", HTTP_GET, [](AsyncWebServerRequest *request) {
+        StaticJsonDocument<1024> doc;
+        
+        doc["hysteresis"] = config.hysteresis;
+        doc["Kp"] = config.Kp;
+        doc["Ki"] = config.Ki;
+        doc["Kd"] = config.Kd;
+        doc["weatherMode"] = config.weatherModeEnabled;
+        doc["usePWM"] = config.usePWM;
+        doc["latitude"] = config.latitude;
+        doc["longitude"] = config.longitude;
+        doc["cameraEnabled"] = config.cameraEnabled;
+		doc["cameraResolution"] = config.cameraResolution;
+        doc["useTempCurve"] = config.useTempCurve;
+        doc["globalMinTempSet"] = config.globalMinTempSet;
+        doc["globalMaxTempSet"] = config.globalMaxTempSet;
+        doc["lastSave"] = config.lastSaveTime;
+        doc["ledState"] = config.ledState;
+		doc["ledBrightness"] = config.ledBrightness;
+		doc["ledRed"] = config.ledRed;
+		doc["ledGreen"] = config.ledGreen;
+		doc["ledBlue"]  = config.ledBlue;
+        doc["seasonalModeEnabled"] = config.seasonalModeEnabled;
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    });
+    
+    server.on("/getTempCurve", HTTP_GET, [](AsyncWebServerRequest *request) {
+        DynamicJsonDocument doc(1024);
+        JsonArray array = doc.to<JsonArray>();
+        
+        for (int i = 0; i < TEMP_CURVE_POINTS; i++) {
+            array.add(config.tempCurve[i]);
+        }
+        
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    });
+    
+    // === ROUTES DE DONNÉES ===
+    server.on("/temperature", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(200, "text/plain", readSht31Temperature().c_str());
+    });
+    
+    server.on("/humidity", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(200, "text/plain", readSht31Humidity().c_str());
+    });
+    
+    server.on("/heaterState", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(200, "text/plain", getHeaterState().c_str());
+    });
+    
+    server.on("/currentTime", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(200, "text/plain", getCurrentTime().c_str());
+    });
+    
+    server.on("/movingAverageTemp", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(200, "text/plain", getMovingAverageTemp().c_str());
+    });
+    
+    server.on("/movingAverageHum", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(200, "text/plain", getMovingAverageHum().c_str());
+    });
+    
+    server.on("/maxTemperature", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(200, "text/plain", String(maxTemperature, 1));
+    });
+    
+    server.on("/minTemperature", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(200, "text/plain", String(minTemperature, 1));
+    });
+    
+    server.on("/maxHumidite", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(200, "text/plain", String(maxHumidite, 1));
+    });
+    
+    server.on("/minHumidite", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(200, "text/plain", String(minHumidite, 1));
+    });
+    
+    server.on("/history", HTTP_GET, handleHistoryRequest);
+    
+    server.on("/weatherData", HTTP_GET, [](AsyncWebServerRequest *request) {
+        ExternalWeather w = getWeatherData();
+        if (isnan(w.temperature) || isnan(w.humidity)) {
+            request->send(503, "application/json", "{\"error\":\"invalid data\"}");
+        } else {
+            String json = "{\"temp\":\"" + String(w.temperature, 1) + 
+                         "\",\"hum\":\"" + String(w.humidity, 0) + "}";
+            request->send(200, "application/json", json);
+        }
+    });
+    
+    // === SÉCURITÉ ===
+    server.on("/safetyStatus", HTTP_GET, [](AsyncWebServerRequest *request) {
+        StaticJsonDocument<512> doc;
+        
+        doc["level"] = safety.currentLevel;
+        doc["levelName"] = (safety.currentLevel == SAFETY_NORMAL) ? "Normal" : 
+                          (safety.currentLevel == SAFETY_WARNING) ? "Alerte" : 
+                          (safety.currentLevel == SAFETY_CRITICAL) ? "Critique" : "Urgence";
+        doc["emergencyShutdown"] = safety.emergencyShutdown;
+        doc["lastError"] = safety.lastErrorMessage;
+        doc["consecutiveFailures"] = safety.consecutiveFailures;
+        doc["lastSensorRead"] = (millis() - safety.lastSensorRead) / 1000;
+        doc["lastKnownTemp"] = safety.lastKnownGoodTemp;
+        doc["lastKnownHum"] = safety.lastKnownGoodHum;
+        
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    });
+    
+    server.on("/resetSafety", HTTP_GET, [](AsyncWebServerRequest *request) {
+        if (safety.currentLevel <= SAFETY_WARNING) {
+            safety.currentLevel = SAFETY_NORMAL;
+            exitSafeMode();
+            request->send(200, "text/plain", "Système de sécurité réinitialisé");
+        } else {
+            request->send(403, "text/plain", "Impossible de réinitialiser en mode critique/urgence");
+        }
+    });
+    
+    // === CAMÉRA ===
+    /*
+    server.on("/capture", HTTP_GET, [](AsyncWebServerRequest *request) {
+        camera_fb_t *fb = esp_camera_fb_get();
+        if (!fb) {
+            request->send(500, "text/plain", "Erreur capture image");
+            return;
+        }
+        
+        AsyncWebServerResponse *response = request->beginResponse(
+            "image/jpeg", fb->len,
+            [fb](uint8_t *buffer, size_t maxLen, size_t alreadySent) -> size_t {
+                if (alreadySent >= fb->len) return 0;
+                size_t toCopy = min(fb->len - alreadySent, maxLen);
+                memcpy(buffer, fb->buf + alreadySent, toCopy);
+                if (alreadySent + toCopy >= fb->len) esp_camera_fb_return(fb);
+                return toCopy;
+            }
+        );
+        
+        request->send(response);
+    });
+
+    */
+// === ROUTES VIDÉO OPTIMISÉES ===
+server.on("/stream", HTTP_GET, handleVideoStream);
+
+server.on("/capture", HTTP_GET, [](AsyncWebServerRequest *request) {
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) {
+        request->send(500, "text/plain", "Erreur capture image");
+        return;
+    }
+    
+    // Utiliser send() au lieu de send_P() - les données sont en RAM, pas en PROGMEM
+    AsyncWebServerResponse *response = request->beginResponse(
+        "image/jpeg", 
+        fb->len,
+        [fb](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
+            if (index >= fb->len) {
+                esp_camera_fb_return(fb);
+                return 0;
+            }
+            
+            size_t bytesToCopy = min(maxLen, fb->len - index);
+            memcpy(buffer, fb->buf + index, bytesToCopy);
+            
+            // Si c'est la dernière partie, libérer le frame buffer
+            if (index + bytesToCopy >= fb->len) {
+                esp_camera_fb_return(fb);
+            }
+            
+            return bytesToCopy;
+        }
+    );
+    
+    response->addHeader("Cache-Control", "no-cache");
+    request->send(response);
+});
+
+
+    server.on("/capture", HTTP_GET, [](AsyncWebServerRequest *request) {
+        camera_fb_t *fb = esp_camera_fb_get();
+        if (!fb) {
+            request->send(500, "text/plain", "Erreur capture image");
+            return;
+        }
+        
+        AsyncWebServerResponse *response = request->beginResponse(
+            "image/jpeg", fb->len,
+            [fb](uint8_t *buffer, size_t maxLen, size_t alreadySent) -> size_t {
+                if (alreadySent >= fb->len) return 0;
+                size_t toCopy = min(fb->len - alreadySent, maxLen);
+                memcpy(buffer, fb->buf + alreadySent, toCopy);
+                if (alreadySent + toCopy >= fb->len) esp_camera_fb_return(fb);
+                return toCopy;
+            }
+        );
+        
+        request->send(response);
+    });
+
+
+// Configuration dynamique de la vitesse
+server.on("/setCameraSpeed", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (request->hasParam("fps")) {
+        int targetFps = request->getParam("fps")->value().toInt();
+        sensor_t *s = esp_camera_sensor_get();
+        
+        if (s != NULL) {
+            if (targetFps >= 20) {
+                // Mode haute vitesse
+                s->set_framesize(s, FRAMESIZE_QVGA);
+                s->set_quality(s, 8);
+                config.cameraResolution = "qvga";
+            } else if (targetFps >= 10) {
+                // Mode équilibré
+                s->set_framesize(s, FRAMESIZE_VGA);
+                s->set_quality(s, 12);
+                config.cameraResolution = "vga";
+            } else {
+                // Mode qualité
+                s->set_framesize(s, FRAMESIZE_SVGA);
+                s->set_quality(s, 15);
+                config.cameraResolution = "svga";
+            }
+            
+            Serial.printf("📹 Vitesse caméra ajustée pour ~%d FPS\n", targetFps);
+            request->send(200, "text/plain", "Vitesse ajustée");
+        } else {
+            request->send(500, "text/plain", "Capteur non accessible");
+        }
+    } else {
+        request->send(400, "text/plain", "Paramètre fps manquant");
+    }
+});
+
+// === ROUTE MJPEG OPTIMISÉE ===
+server.on("/mjpeg", HTTP_GET, [](AsyncWebServerRequest *request) {
+    Serial.println("🎥 Démarrage stream MJPEG");
+    MJPEGStreamer::streamMJPEG(request);
+});
+
+// Route pour tester la compatibilité
+server.on("/mjpeg-info", HTTP_GET, [](AsyncWebServerRequest *request) {
+    StaticJsonDocument<512> doc;
+    
+    sensor_t *s = esp_camera_sensor_get();
+    if (s) {
+        doc["format"] = "MJPEG";
+        doc["resolution"] = config.cameraResolution;
+        doc["quality"] = s->status.quality;
+        doc["framesize"] = s->status.framesize;
+        doc["pixformat"] = "JPEG";
+        doc["compatible"] = true;
+        
+        // Estimation du framerate
+        if (config.cameraResolution == "qvga") {
+            doc["estimated_fps"] = "15-25";
+        } else if (config.cameraResolution == "vga") {
+            doc["estimated_fps"] = "8-15";
+        } else {
+            doc["estimated_fps"] = "3-8";
+        }
+    } else {
+        doc["compatible"] = false;
+        doc["error"] = "Sensor not accessible";
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+});
+
+
+server.begin();
+    Serial.println("✅ Serveur web démarré");
+
+    // === DÉMARRAGE DE LA TÂCHE DÉDIÉE AU CORE 1 ===
+    xTaskCreatePinnedToCore(
+        core1LogicTask,       // Fonction de la tâche
+        "Core1_AppLogic",     // Nom de la tâche (pour le débogage)
+        10000,                // Taille de la pile (stack size)
+        NULL,                 // Paramètres de la tâche (aucun)
+        1,                    // Priorité de la tâche
+        &Core1TaskHandle,     // Handle de la tâche
+        1                     // Épingler au Core 1
+    );
+}
+
+void loop() {
+    // La logique principale est maintenant dans core1LogicTask sur le Core 1.
+}
+

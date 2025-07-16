@@ -1,0 +1,1077 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🌡️ Éditeur de Température Saisonnier - Dark Mode</title>
+    <style>
+        :root {
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #2d2d2d;
+            --bg-tertiary: #3d3d3d;
+            --text-primary: #ffffff;
+            --text-secondary: #b0b0b0;
+            --accent: #00d4ff;
+            --accent-hover: #00b8e6;
+            --border: #404040;
+            --success: #00ff88;
+            --danger: #ff4757;
+            --warning: #ffa502;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, var(--bg-primary) 0%, #0f0f0f 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: var(--bg-secondary);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border: 1px solid var(--border);
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            background: linear-gradient(45deg, var(--accent), #ff6b6b);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-size: 2.5em;
+            text-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-bottom: 25px;
+            padding: 20px;
+            background: var(--bg-tertiary);
+            border-radius: 10px;
+            border: 1px solid var(--border);
+        }
+
+        .navigation {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin: 20px 0;
+            padding: 20px;
+            background: var(--bg-tertiary);
+            border-radius: 10px;
+            border: 1px solid var(--border);
+        }
+
+        .day-selector {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex: 1;
+        }
+
+        .day-selector select {
+            padding: 10px 15px;
+            font-size: 14px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            min-width: 200px;
+        }
+
+        .nav-btn {
+            padding: 10px 15px;
+            background: var(--accent);
+            color: var(--bg-primary);
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .nav-btn:hover {
+            background: var(--accent-hover);
+            transform: translateY(-2px);
+        }
+
+        .nav-btn:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .temperature-grid {
+            display: grid;
+            grid-template-columns: repeat(24, 1fr);
+            gap: 3px;
+            margin: 25px 0;
+            padding: 20px;
+            background: var(--bg-tertiary);
+            border-radius: 10px;
+            border: 1px solid var(--border);
+        }
+
+        .hour-header {
+            background: linear-gradient(45deg, var(--accent), #ff6b6b);
+            color: var(--bg-primary);
+            padding: 8px 4px;
+            text-align: center;
+            font-size: 12px;
+            font-weight: bold;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        }
+
+        .temp-input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid var(--border);
+            text-align: center;
+            font-size: 13px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            border-radius: 5px;
+            transition: all 0.3s ease;
+        }
+
+        .temp-input:focus {
+            border-color: var(--accent);
+            outline: none;
+            box-shadow: 0 0 10px rgba(0, 212, 255, 0.3);
+        }
+
+        .chart-container {
+            margin: 25px 0;
+            height: 400px;
+            background: var(--bg-tertiary);
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .chart {
+            width: 100%;
+            height: 100%;
+            cursor: crosshair;
+        }
+
+        .btn {
+            padding: 12px 20px;
+            background: var(--accent);
+            color: var(--bg-primary);
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn:hover {
+            background: var(--accent-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 212, 255, 0.3);
+        }
+
+        .btn-danger {
+            background: var(--danger);
+        }
+
+        .btn-danger:hover {
+            background: #e84057;
+        }
+
+        .btn-success {
+            background: var(--success);
+        }
+
+        .btn-success:hover {
+            background: #00e67a;
+        }
+
+        .btn-warning {
+            background: var(--warning);
+        }
+
+        .btn-warning:hover {
+            background: #ff9500;
+        }
+
+        .stats {
+            background: var(--bg-tertiary);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            border: 1px solid var(--border);
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .stat-item {
+            background: var(--bg-primary);
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid var(--border);
+        }
+
+        .stat-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: var(--accent);
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            color: var(--text-secondary);
+            font-size: 0.9em;
+        }
+
+        .file-input {
+            position: relative;
+            display: inline-block;
+            cursor: pointer;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 20px;
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+        }
+
+        .file-input:hover {
+            background: var(--bg-tertiary);
+            border-color: var(--accent);
+        }
+
+        .file-input input[type="file"] {
+            position: absolute;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+
+        .tooltip {
+            position: absolute;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            padding: 8px 12px;
+            border-radius: 5px;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 1000;
+            border: 1px solid var(--border);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+
+        .chart-info {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: var(--text-primary);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            border: 1px solid var(--border);
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 15px;
+            }
+            
+            .controls, .navigation {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .temperature-grid {
+                grid-template-columns: repeat(12, 1fr);
+            }
+            
+            .stats {
+                grid-template-columns: 1fr;
+            }
+        }
+
+
+
+
+
+
+
+    .calendar-heatmap {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin: 20px 0 30px;
+    }
+
+    .month-block {
+      border: 1px solid var(--border);
+      padding: 8px;
+      border-radius: 8px;
+      background-color: var(--bg-secondary);
+    }
+
+    .month-title {
+      text-align: center;
+      font-size: 0.9em;
+      color: var(--text-secondary);
+      margin-bottom: 5px;
+    }
+
+    .month-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 2px;
+    }
+
+
+
+.weekday-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+
+    .day-cell {
+      width: 14px;
+      height: 14px;
+      border-radius: 2px;
+      background-color: #555;
+      cursor: pointer;
+      transition: transform 0.2s ease;
+    }
+
+
+.day-cell:hover {
+  transform: scale(1.3);
+  outline: 1px solid var(--accent);
+}
+
+.month-labels {
+  display: flex;
+  justify-content: space-between;
+  margin: 5px 0 5px 40px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.day-cell.selected {
+  outline: 2px solid var(--accent);
+  box-shadow: 0 0 5px var(--accent);
+}
+
+
+
+  </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌡️ Éditeur de Température Saisonnier</h1>
+        
+        <div class="controls">
+            <div class="file-input">
+                <input type="file" id="fileInput" accept=".bin">
+                📁 Charger temperature.bin
+            </div>
+            <button onclick="saveFile()" class="btn btn-success">💾 Sauvegarder temperature_modif.bin</button>
+            <button onclick="exportJSON()" class="btn">📄 Exporter JSON</button>
+            <button onclick="importJSON()" class="btn btn-warning">📥 Importer JSON</button>
+            <input type="file" id="jsonInput" accept=".json" style="display: none;">
+        </div>
+    <!-- 🆕 Filtres de mois + vue annuelle -->
+    <div class="controls">
+      <label for="monthFilter">Filtrer par mois :</label>
+      <select id="monthFilter" onchange="createAnnualCalendar()">
+        <option value="all">Tous</option>
+        <option value="0">Janvier</option>
+        <option value="1">Février</option>
+        <option value="2">Mars</option>
+        <option value="3">Avril</option>
+        <option value="4">Mai</option>
+        <option value="5">Juin</option>
+        <option value="6">Juillet</option>
+        <option value="7">Août</option>
+        <option value="8">Septembre</option>
+        <option value="9">Octobre</option>
+        <option value="10">Novembre</option>
+        <option value="11">Décembre</option>
+      </select>
+    </div>
+<div class="month-labels">
+  <span>Jan</span><span>Fév</span><span>Mar</span><span>Avr</span><span>Mai</span><span>Juin</span><span>Juil</span><span>Aoû</span><span>Sep</span><span>Oct</span><span>Nov</span><span>Déc</span>
+</div>
+
+    <div id="calendarHeatmap" class="calendar-heatmap"></div>
+        <div class="navigation">
+            <div class="day-selector">
+                <label for="daySelect">Jour de l'année :</label>
+                <select id="daySelect" onchange="loadDay()">
+                    <!-- Options générées par JavaScript -->
+                </select>
+            </div>
+            <button onclick="previousDay()" class="nav-btn" id="prevBtn">⬅️ Précédent</button>
+            <button onclick="nextDay()" class="nav-btn" id="nextBtn">Suivant ➡️</button>
+            <button onclick="copyDay()" class="btn">📋 Copier</button>
+            <button onclick="pasteDay()" class="btn">📋 Coller</button>
+        </div>
+
+        <div class="stats" id="stats">
+            <!-- Statistiques générées par JavaScript -->
+        </div>
+
+        <div class="temperature-grid" id="temperatureGrid">
+            <!-- Grille générée par JavaScript -->
+        </div>
+
+        <div class="chart-container">
+            <canvas id="temperatureChart" class="chart"></canvas>
+            <div class="chart-info" id="chartInfo">
+                Cliquez et glissez pour modifier les températures
+            </div>
+        </div>
+
+        <div class="controls">
+            <button onclick="applyToAll()" class="btn btn-danger">⚠️ Appliquer à tous les jours</button>
+            <button onclick="smoothCurve()" class="btn">📈 Lisser la courbe</button>
+            <button onclick="resetDay()" class="btn btn-danger">🔄 Réinitialiser le jour</button>
+            <button onclick="generateSineWave()" class="btn btn-warning">🌊 Générer courbe sinusoïdale</button>
+        </div>
+    </div>
+
+    <div id="tooltip" class="tooltip" style="display: none;"></div>
+
+    <script>
+        let temperatureData = [];
+        let currentDay = 0;
+        let copiedDay = null;
+        let isDragging = false;
+        let chart = null;
+
+        // Initialisation
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeDaySelector();
+            initializeEmptyData();
+            loadDay();
+			createAnnualCalendar();
+            setupFileInput();
+            setupChartInteraction();
+            setupKeyboardShortcuts();
+        });
+
+        function initializeDaySelector() {
+            const select = document.getElementById('daySelect');
+            for (let i = 0; i < 366; i++) {
+                const option = document.createElement('option');
+                option.value = i;
+                option.textContent = `Jour ${i + 1} (${getDateString(i)})`;
+                select.appendChild(option);
+            }
+        }
+
+        function getDateString(dayOfYear) {
+            const date = new Date(2024, 0, dayOfYear + 1);
+            return date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+        }
+
+        function initializeEmptyData() {
+            temperatureData = [];
+            for (let day = 0; day < 366; day++) {
+                temperatureData[day] = [];
+                for (let hour = 0; hour < 24; hour++) {
+                    temperatureData[day][hour] = 20.0;
+                }
+            }
+        }
+
+        function loadDay() {
+            currentDay = parseInt(document.getElementById('daySelect').value);
+            createTemperatureGrid();
+            updateChart();
+            updateStats();
+            updateNavigationButtons();
+			createAnnualCalendar();
+        }
+
+        function updateNavigationButtons() {
+            document.getElementById('prevBtn').disabled = currentDay === 0;
+            document.getElementById('nextBtn').disabled = currentDay === 365;
+        }
+
+        function previousDay() {
+            if (currentDay > 0) {
+                currentDay--;
+                document.getElementById('daySelect').value = currentDay;
+                loadDay();
+            }
+        }
+
+        function nextDay() {
+            if (currentDay < 365) {
+                currentDay++;
+                document.getElementById('daySelect').value = currentDay;
+                loadDay();
+            }
+        }
+
+        function createTemperatureGrid() {
+            const grid = document.getElementById('temperatureGrid');
+            grid.innerHTML = '';
+
+            // Headers des heures
+            for (let hour = 0; hour < 24; hour++) {
+                const header = document.createElement('div');
+                header.className = 'hour-header';
+                header.textContent = `${hour}h`;
+                grid.appendChild(header);
+            }
+
+            // Inputs de température
+            for (let hour = 0; hour < 24; hour++) {
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.step = '0.1';
+                input.className = 'temp-input';
+                input.value = temperatureData[currentDay][hour].toFixed(1);
+                input.onchange = function() {
+                    temperatureData[currentDay][hour] = parseFloat(this.value) || 0;
+                    updateChart();
+                    updateStats();
+                };
+                grid.appendChild(input);
+            }
+        }
+
+        function setupChartInteraction() {
+            const canvas = document.getElementById('temperatureChart');
+            const tooltip = document.getElementById('tooltip');
+
+            canvas.addEventListener('mousedown', startDragging);
+            canvas.addEventListener('mousemove', handleMouseMove);
+            canvas.addEventListener('mouseup', stopDragging);
+            canvas.addEventListener('mouseleave', stopDragging);
+
+            function startDragging(e) {
+                isDragging = true;
+                updateTemperatureFromMouse(e);
+            }
+
+            function handleMouseMove(e) {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+
+                // Calcul de l'heure
+                const hour = Math.round((x / canvas.width) * 23);
+                const data = temperatureData[currentDay];
+                const maxTemp = Math.max(...data) + 2;
+                const minTemp = Math.min(...data) - 2;
+                const temp = maxTemp - ((y / canvas.height) * (maxTemp - minTemp));
+
+                // Affichage du tooltip
+                tooltip.style.display = 'block';
+                tooltip.style.left = (e.clientX + 10) + 'px';
+                tooltip.style.top = (e.clientY - 10) + 'px';
+                tooltip.innerHTML = `Heure: ${hour}h<br>Température: ${temp.toFixed(1)}°C`;
+
+                if (isDragging) {
+                    updateTemperatureFromMouse(e);
+                }
+            }
+
+            function stopDragging() {
+                isDragging = false;
+                tooltip.style.display = 'none';
+            }
+
+            function updateTemperatureFromMouse(e) {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+
+                const hour = Math.round((x / canvas.width) * 23);
+                const data = temperatureData[currentDay];
+                const maxTemp = Math.max(...data) + 2;
+                const minTemp = Math.min(...data) - 2;
+                const temp = maxTemp - ((y / canvas.height) * (maxTemp - minTemp));
+
+                if (hour >= 0 && hour < 24) {
+                    temperatureData[currentDay][hour] = Math.max(0, Math.min(50, temp));
+                    createTemperatureGrid();
+                    updateChart();
+                    updateStats();
+                }
+            }
+        }
+
+        function setupKeyboardShortcuts() {
+            document.addEventListener('keydown', function(e) {
+                if (e.ctrlKey || e.metaKey) {
+                    switch(e.key) {
+                        case 's':
+                            e.preventDefault();
+                            saveFile();
+                            break;
+                        case 'c':
+                            if (e.target.tagName !== 'INPUT') {
+                                e.preventDefault();
+                                copyDay();
+                            }
+                            break;
+                        case 'v':
+                            if (e.target.tagName !== 'INPUT') {
+                                e.preventDefault();
+                                pasteDay();
+                            }
+                            break;
+                    }
+                }
+                
+                if (e.target.tagName !== 'INPUT') {
+                    switch(e.key) {
+                        case 'ArrowLeft':
+                            e.preventDefault();
+                            previousDay();
+                            break;
+                        case 'ArrowRight':
+                            e.preventDefault();
+                            nextDay();
+                            break;
+                    }
+                }
+            });
+        }
+
+function updateChart() {
+  const canvas = document.getElementById('temperatureChart');
+  const ctx = canvas.getContext('2d');
+
+  // 1. Détection de ratio d'affichage (pour écrans retina)
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+
+  // 2. Mise à jour de la résolution interne du canvas
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+
+  // 3. Mise à l’échelle du contexte de dessin
+  ctx.scale(dpr, dpr);
+
+  // 🧠 Ne pas oublier d’utiliser rect.width / rect.height ensuite pour positionner les éléments !
+  const width = rect.width;
+  const height = rect.height;
+
+  const data = temperatureData[currentDay] || [];
+  const maxVisual = Math.max(...data) + 2;
+  const minVisual = Math.min(...data) - 2;
+  const range = maxVisual - minVisual;
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#888';
+
+  // Lignes horizontales + labels
+  for (let i = 0; i <= 10; i++) {
+    const y = (i / 10) * height;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+
+    const label = (maxVisual - i * (range / 10)).toFixed(1) + '°C';
+    ctx.fillStyle = '#b0b0b0';
+    ctx.font = '11px Segoe UI';
+    ctx.textAlign = 'left';
+    ctx.fillText(label, 5, y + 3);
+  }
+
+  // Tracer la courbe
+  ctx.beginPath();
+  data.forEach((temp, hour) => {
+    const x = (hour / 23) * width;
+    const y = height - ((temp - minVisual) / range) * height;
+    if (hour === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = '#00d4ff';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+        function updateStats() {
+            const data = temperatureData[currentDay];
+            const max = Math.max(...data).toFixed(1);
+            const min = Math.min(...data).toFixed(1);
+            const avg = (data.reduce((a, b) => a + b, 0) / data.length).toFixed(1);
+            const range = (max - min).toFixed(1);
+            
+            document.getElementById('stats').innerHTML = `
+                <div class="stat-item">
+                    <div class="stat-value">${max}°C</div>
+                    <div class="stat-label">Température Max</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${min}°C</div>
+                    <div class="stat-label">Température Min</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${avg}°C</div>
+                    <div class="stat-label">Température Moyenne</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${range}°C</div>
+                    <div class="stat-label">Amplitude</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${currentDay + 1}/366</div>
+                    <div class="stat-label">Jour de l'année</div>
+                </div>
+            `;
+        }
+
+        function copyDay() {
+            copiedDay = [...temperatureData[currentDay]];
+            showNotification('Jour copié !', 'success');
+        }
+
+        function pasteDay() {
+            if (copiedDay) {
+                temperatureData[currentDay] = [...copiedDay];
+                loadDay();
+                showNotification('Jour collé !', 'success');
+            } else {
+                showNotification('Aucun jour à coller !', 'warning');
+            }
+        }
+
+        function applyToAll() {
+            if (confirm('Appliquer les températures du jour actuel à tous les jours de l\'année ?')) {
+                const currentDayData = [...temperatureData[currentDay]];
+                for (let day = 0; day < 366; day++) {
+                    temperatureData[day] = [...currentDayData];
+                }
+                showNotification('Appliqué à tous les jours !', 'success');
+            }
+			createAnnualCalendar();
+        }
+
+        function smoothCurve() {
+            const data = temperatureData[currentDay];
+            const smoothed = [];
+            for (let i = 0; i < 24; i++) {
+                let sum = data[i];
+                let count = 1;
+                if (i > 0) { sum += data[i-1]; count++; }
+                if (i < 23) { sum += data[i+1]; count++; }
+                smoothed[i] = sum / count;
+            }
+            temperatureData[currentDay] = smoothed;
+            loadDay();
+            showNotification('Courbe lissée !', 'success');
+			createAnnualCalendar();
+        }
+
+        function generateSineWave() {
+            const baseTemp = 20;
+            const amplitude = 5;
+            for (let hour = 0; hour < 24; hour++) {
+                const temp = baseTemp + amplitude * Math.sin((hour - 6) * Math.PI / 12);
+                temperatureData[currentDay][hour] = Math.max(0, temp);
+            }
+            loadDay();
+            showNotification('Courbe sinusoïdale générée !', 'success');
+        }
+
+        function resetDay() {
+            if (confirm('Réinitialiser le jour actuel à 20°C ?')) {
+                for (let hour = 0; hour < 24; hour++) {
+                    temperatureData[currentDay][hour] = 20.0;
+                }
+                loadDay();
+                showNotification('Jour réinitialisé !', 'success');
+            }
+        }
+
+        function showNotification(message, type = 'info') {
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                padding: 15px 25px;
+                background: ${type === 'success' ? 'var(--success)' : type === 'warning' ? 'var(--warning)' : 'var(--accent)'};
+                color: var(--bg-primary);
+                border-radius: 8px;
+                font-weight: bold;
+                z-index: 10000;
+                box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+                animation: slideIn 0.3s ease;
+            `;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+
+            setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease';
+                setTimeout(() => notification.remove(), 300);
+            }, 3000);
+        }
+
+        function setupFileInput() {
+            document.getElementById('fileInput').addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const buffer = e.target.result;
+                        loadBinaryData(buffer);
+                    };
+                    reader.readAsArrayBuffer(file);
+                }
+            });
+
+            document.getElementById('jsonInput').addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        try {
+                            const jsonData = JSON.parse(e.target.result);
+                            temperatureData = jsonData;
+                            loadDay();
+                            showNotification('Données JSON importées !', 'success');
+                        } catch (error) {
+                            showNotification('Erreur lors de l\'importation JSON : ' + error.message, 'warning');
+                        }
+                    };
+                    reader.readAsText(file);
+                }
+            });
+        }
+
+        function loadBinaryData(buffer) {
+            const view = new DataView(buffer);
+            temperatureData = [];
+            
+            for (let day = 0; day < 366; day++) {
+                temperatureData[day] = [];
+                for (let hour = 0; hour < 24; hour++) {
+                    const offset = (day * 24 + hour) * 2;
+                    const tempInt = view.getInt16(offset, true);
+                    temperatureData[day][hour] = tempInt / 10.0;
+                }
+            }
+            
+            loadDay();
+            showNotification('Fichier binaire chargé !', 'success');
+        }
+
+        function saveFile() {
+            const buffer = new ArrayBuffer(366 * 24 * 2);
+            const view = new DataView(buffer);
+            
+            for (let day = 0; day < 366; day++) {
+                for (let hour = 0; hour < 24; hour++) {
+                    const offset = (day * 24 + hour) * 2;
+                    const tempInt = Math.round(temperatureData[day][hour] * 10);
+                    view.setInt16(offset, tempInt, true);
+                }
+            }
+            
+            const blob = new Blob([buffer], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'temperature_modif.bin';
+            a.click();
+            URL.revokeObjectURL(url);
+            showNotification('Fichier temperature_modif.bin sauvegardé !', 'success');
+        }
+
+        function exportJSON() {
+            const jsonData = JSON.stringify(temperatureData, null, 2);
+            const blob = new Blob([jsonData], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'temperature_data.json';
+            a.click();
+            URL.revokeObjectURL(url);
+            showNotification('Données JSON exportées !', 'success');
+        }
+
+        function importJSON() {
+            document.getElementById('jsonInput').click();
+			createAnnualCalendar();
+        }
+
+        // Ajout des animations CSS
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes slideIn {
+                from { transform: translateX(100%); opacity: 0; }
+                to { transform: translateX(0); opacity: 1; }
+            }
+            @keyframes slideOut {
+                from { transform: translateX(0); opacity: 1; }
+                to { transform: translateX(100%); opacity: 0; }
+            }
+        `;
+        document.head.appendChild(style);
+
+
+
+
+
+// Calcule la semaine ISO (0 à 53)
+function getWeekNumber(date) {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.floor(((d - yearStart) / 86400000 + 1) / 7);
+}
+
+function createAnnualCalendar() {
+  const container = document.getElementById('calendarHeatmap');
+  if (!container) return;
+  container.innerHTML = '';
+
+  const selectedMonth = document.getElementById('monthFilter')?.value ?? 'all';
+  const monthNames = [
+    "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+    "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"
+  ];
+
+  let dayIndex = 0;
+
+  for (let month = 0; month < 12; month++) {
+    const daysInMonth = new Date(2024, month + 1, 0).getDate();
+
+    if (selectedMonth !== 'all' && parseInt(selectedMonth) !== month) {
+      dayIndex += daysInMonth;
+      continue;
+    }
+
+    const monthBlock = document.createElement('div');
+    monthBlock.className = 'month-block';
+
+    const title = document.createElement('div');
+    title.className = 'month-title';
+    title.textContent = monthNames[month];
+    monthBlock.appendChild(title);
+
+    const grid = document.createElement('div');
+    grid.className = 'month-grid';
+
+    const firstDay = new Date(2024, month, 1).getDay();
+    const offset = (firstDay + 6) % 7; // lundi = 0
+
+    for (let i = 0; i < offset; i++) {
+      const empty = document.createElement('div');
+      grid.appendChild(empty);
+    }
+
+    for (let d = 1; d <= daysInMonth; d++) {
+      const currentDayIndex = dayIndex;
+      const dayCell = document.createElement('div');
+      dayCell.className = 'day-cell';
+
+      const avgTemp = getAverageTempForDay(currentDayIndex);
+      dayCell.style.backgroundColor = temperatureToColor(avgTemp);
+      dayCell.title = `Jour ${currentDayIndex + 1} (${getDateString(currentDayIndex)}) : ${avgTemp.toFixed(1)}°C`;
+
+      dayCell.onclick = () => {
+        const select = document.getElementById('daySelect');
+        if (select) {
+          select.value = currentDayIndex;
+          const event = new Event('change');
+          select.dispatchEvent(event);
+
+          // Mise en évidence du jour sélectionné
+          document.querySelectorAll('.day-cell.selected').forEach(el => el.classList.remove('selected'));
+          dayCell.classList.add('selected');
+        }
+      };
+
+      if (currentDayIndex === currentDay) {
+        dayCell.classList.add('selected');
+      }
+
+      grid.appendChild(dayCell);
+      dayIndex++;
+    }
+
+    monthBlock.appendChild(grid);
+    container.appendChild(monthBlock);
+  }
+}
+
+    function getYearlyTemperatureRange() {
+      let min = Infinity;
+      let max = -Infinity;
+      for (let day = 0; day < temperatureData.length; day++) {
+        for (let h = 0; h < 24; h++) {
+          const t = temperatureData[day][h];
+          if (t < min) min = t;
+          if (t > max) max = t;
+        }
+      }
+      return { min, max };
+    }
+
+    function temperatureToColor(temp) {
+      const { min, max } = getYearlyTemperatureRange();
+      const t = Math.min(1, Math.max(0, (temp - min) / (max - min)));
+      const hue = (1 - t) * 240;
+      return `hsl(${hue}, 100%, 50%)`;
+    }
+
+    function getAverageTempForDay(day) {
+      const temps = temperatureData[day] || [];
+      if (temps.length === 0) return 20.0;
+      return temps.reduce((a, b) => a + b, 0) / temps.length;
+    }
+
+    function loadDay() {
+      currentDay = parseInt(document.getElementById('daySelect').value);
+      createTemperatureGrid();
+      updateChart();
+      updateStats();
+      updateNavigationButtons();
+      createAnnualCalendar();
+    }
+ 
+
+
+  </script>
+</body>
+</html>

@@ -18,6 +18,85 @@ const resolutionDimensions = {
     'svga': { width: 800, height: 600 }
 };
 
+// Vérifier la compatibilité MJPEG
+fetch('/mjpeg-info')
+    .then(response => response.json())
+    .then(data => {
+        console.log('MJPEG Info:', data);
+        if (data.compatible) {
+            console.log(`✅ MJPEG compatible - FPS estimé: ${data.estimated_fps}`);
+        }
+    });
+
+// Redémarrer le stream en cas d'erreur
+document.getElementById('mjpegStream').onerror = function() {
+    console.log('🔄 Redémarrage stream MJPEG');
+    setTimeout(() => {
+        this.src = '/mjpeg?' + new Date().getTime();
+    }, 1000);
+};
+
+// ✅ Import de profil mis à jour pour la nouvelle structure
+document.getElementById('profileUpload').addEventListener('change', async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async function (e) {
+        try {
+            const json = JSON.parse(e.target.result);
+            
+            // Validation du format
+            if (!json.name) {
+                throw new Error("Nom de profil manquant");
+            }
+            
+            // Vérifier s'il s'agit d'un profil au nouveau format
+            const isNewFormat = json.version === "2.0" || json.profileType;
+            
+            if (!isNewFormat && !json.temperatures) {
+                throw new Error("Format de profil non reconnu");
+            }
+
+            const response = await fetch('/saveProfile', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(json)
+            });
+            
+            if (response.ok) {
+                alert("✅ Profil importé avec succès");
+                refreshProfileList();
+            } else {
+                const error = await response.text();
+                alert("❌ Erreur lors de l'importation : " + error);
+            }
+        } catch (e) {
+            alert("❌ Fichier invalide : " + e.message);
+        }
+    };
+    reader.readAsText(file);
+});
+
+
+// Rafraîchissement automatique de l'image capture
+function refreshCapture() {
+    const img = document.getElementById('cameraCapture');
+    img.src = '/capture?' + new Date().getTime(); // Cache busting
+}
+
+// Rafraîchir toutes les 100ms (10 FPS)
+setInterval(refreshCapture, 100);
+
+// Ajuster la vitesse dynamiquement
+function setCameraSpeed(fps) {
+    fetch(`/setCameraSpeed?fps=${fps}`)
+        .then(response => response.text())
+        .then(data => console.log('Vitesse ajustée:', data));
+}
+
+
+
 function setStreamDimensions(resolution) {
     const dimensions = resolutionDimensions[resolution];
     const camStream = document.getElementById('camStream');
@@ -421,35 +500,66 @@ let cameraInterval = null;
 let isCameraRunning = false;
 
 // ✅ Fonction corrigée pour le rafraîchissement de la caméra
+let cameraRefreshTimeout = null;
+let cameraRetryCount = 0;
+const MAX_CAMERA_RETRIES = 3;
+
 function cameraRefreshLoop() {
-    if (!isCameraRunning) return; // Arrêter la boucle si la caméra est désactivée
+    if (!cameraEnabled) {
+        cameraRefreshTimeout = null;
+        return;
+    }
 
     const camStream = document.getElementById('camStream');
     if (!camStream) {
         console.warn('❌ Élément camStream non trouvé');
-        isCameraRunning = false;
+        cameraEnabled = false;
         return;
     }
 
     const tempImg = new Image();
-
-    // Si l'image charge avec succès...
+    
     tempImg.onload = () => {
-        camStream.src = tempImg.src; // Mettre à jour l'image visible
-        setTimeout(cameraRefreshLoop, 1000); // Programmer la prochaine image dans 1 seconde
+        camStream.src = tempImg.src;
+        cameraRetryCount = 0; // Reset du compteur en cas de succès
+        
+        // Programmer la prochaine image
+        if (cameraEnabled) {
+            cameraRefreshTimeout = setTimeout(cameraRefreshLoop, 1000);
+        }
     };
 
-    // Si une erreur survient...
     tempImg.onerror = () => {
-        console.warn("⚠️ Erreur de chargement de l'image du flux, nouvelle tentative dans 2s...");
-        setTimeout(cameraRefreshLoop, 2000); // Réessayer dans 2 secondes
+        cameraRetryCount++;
+        console.warn(`⚠️ Erreur caméra (tentative ${cameraRetryCount}/${MAX_CAMERA_RETRIES})`);
+        
+        if (cameraRetryCount >= MAX_CAMERA_RETRIES) {
+            // Arrêter les tentatives et afficher un message d'erreur
+            const errorDiv = document.getElementById('cameraError');
+            if (errorDiv) {
+                errorDiv.style.display = 'block';
+                errorDiv.innerHTML = `
+                    ❌ Caméra indisponible après ${MAX_CAMERA_RETRIES} tentatives. 
+                    <button onclick="retryCameraConnection()" class="ml-2 bg-red-700 px-3 py-1 rounded hover:bg-red-600">
+                        🔄 Réessayer
+                    </button>
+                `;
+            }
+            cameraEnabled = false;
+            return;
+        }
+        
+        // Réessayer avec un délai progressif
+        const retryDelay = Math.min(2000 * cameraRetryCount, 10000);
+        if (cameraEnabled) {
+            cameraRefreshTimeout = setTimeout(cameraRefreshLoop, retryDelay);
+        }
     };
 
-    // Lancer le chargement de l'image avec timestamp pour éviter le cache
+    // Lancer le chargement avec timestamp pour éviter le cache
     tempImg.src = '/capture?' + new Date().getTime();
 }
 
-// ✅ Fonction corrigée pour la visibilité de la caméra
 function updateCameraVisibility() {
     const cameraContainer = document.getElementById('cameraContainer');
     const showCamera = document.getElementById('showCamera');
@@ -463,18 +573,49 @@ function updateCameraVisibility() {
         console.log('📹 Activation de la caméra...');
         cameraContainer.style.display = 'block';
         cameraEnabled = true;
+        cameraRetryCount = 0;
         
-        if (!isCameraRunning) {
-            isCameraRunning = true;
-            cameraRefreshLoop(); // Démarrer la boucle de rafraîchissement
+        // Masquer l'erreur si elle était affichée
+        const errorDiv = document.getElementById('cameraError');
+        if (errorDiv) {
+            errorDiv.style.display = 'none';
+        }
+        
+        // Démarrer le flux
+        if (!cameraRefreshTimeout) {
+            cameraRefreshLoop();
         }
     } else {
         console.log('📹 Désactivation de la caméra...');
         cameraContainer.style.display = 'none';
         cameraEnabled = false;
-        isCameraRunning = false; // Arrêter la boucle au prochain tour
+        
+        // Arrêter le timeout
+        if (cameraRefreshTimeout) {
+            clearTimeout(cameraRefreshTimeout);
+            cameraRefreshTimeout = null;
+        }
     }
 }
+
+// Fonction globale pour le bouton retry
+window.retryCameraConnection = function() {
+    const errorDiv = document.getElementById('cameraError');
+    if (errorDiv) {
+        errorDiv.style.display = 'none';
+    }
+    
+    cameraRetryCount = 0;
+    cameraEnabled = true;
+    
+    if (cameraRefreshTimeout) {
+        clearTimeout(cameraRefreshTimeout);
+    }
+    
+    cameraRefreshLoop();
+};
+
+
 
 // Centraliser les événements
 function initEventListeners() {
@@ -508,6 +649,15 @@ function initEventListeners() {
     if (seasonalMode) {
         seasonalMode.addEventListener("change", () => {
             if (typeof updateSeasonalVisibility === 'function') updateSeasonalVisibility();
+        });
+    }
+
+    const debugMode = document.getElementById("debugMode");
+    if (debugMode) {
+        debugMode.addEventListener("change", () => {
+            const enabled = debugMode.checked;
+            fetch(`/setDebugMode?enabled=${enabled ? 1 : 0}`);
+            console.log(`[DEBUG] Mode debug ${enabled ? 'activé' : 'désactivé'}`);
         });
     }
     
@@ -584,50 +734,88 @@ function initSpectrum() {
     });
 }
 
-// Dans main.js - Modifier l'ordre d'initialisation
+function handleCameraError(img) {
+    console.warn('❌ Erreur stream caméra MJPEG');
+    const errorDiv = document.getElementById('cameraError');
+    if (errorDiv) {
+        errorDiv.style.display = 'block';
+    }
+    
+    // Réessayer après 5 secondes
+    setTimeout(() => {
+        if (cameraEnabled) {
+            img.src = '/mjpeg?' + new Date().getTime();
+        }
+    }, 5000);
+}
+
+function handleCameraLoad(img) {
+    const errorDiv = document.getElementById('cameraError');
+    if (errorDiv) {
+        errorDiv.style.display = 'none';
+    }
+    console.log('✅ Stream caméra connecté');
+}
+
+function retryCameraConnection() {
+    const img = document.getElementById('camStream');
+    const errorDiv = document.getElementById('cameraError');
+    
+    if (errorDiv) errorDiv.style.display = 'none';
+    if (img) {
+        img.src = '/mjpeg?' + new Date().getTime();
+    }
+}
+
+
+// ✅ Initialisation mise à jour dans main.js
+// ✅ CORRECTION : Initialisation sans conflits
 document.addEventListener('DOMContentLoaded', async () => {
     try {
         console.log('🚀 Démarrage de l\'application...');
 
-        // 1. Charger la configuration une seule fois
+        // 1. Fonctions globales
+        window.retryCameraConnection = function() {
+            const errorDiv = document.getElementById('cameraError');
+            if (errorDiv) errorDiv.style.display = 'none';
+            cameraRetryCount = 0;
+            cameraEnabled = true;
+            if (cameraRefreshTimeout) clearTimeout(cameraRefreshTimeout);
+            cameraRefreshLoop();
+        };
+
+        // 2. Configuration
         await configManager.loadConfig();
-        console.log('✅ Configuration chargée');
 
-        // 2. Initialiser l'interface de base
+        // 3. Interface de base
         initTabs();
+        if (typeof initCharts === 'function') initCharts();
+        if (typeof initChart === 'function') await initChart();
 
-        // 3. Initialiser les graphiques
-        if (typeof initCharts === 'function') {
-            initCharts();
-        }
+        // 4. Spectrum
+        await initSpectrum();
 
-        // 4. Initialiser le graphique de température
-        if (typeof initChart === 'function') {
-            await initChart();
-        }
-
-        // 5. ✅ ATTENDRE que Spectrum soit initialisé
-        const ready = await initSpectrum();
-        if (!ready) {
-            alert("Erreur : le color picker n'a pas pu être initialisé.");
-            return;
-        }
-
-        // 6. Maintenant charger l'interface utilisateur avec la config
+        // 5. Interface utilisateur
         if (typeof loadCurrentConfigToUI === 'function') {
             await loadCurrentConfigToUI();
         }
 
-        // 7. Démarrer les mises à jour périodiques
+        // 6. Événements (SANS double appel)
+        initEventListeners();
+
+        // 7. Mises à jour
         const updateManager = new UpdateManager();
         updateManager.startPeriodicUpdates();
 
-        // 8. Initialisation des événements
-        initEventListeners();
+        // 8. Profils (en dernier)
+        setTimeout(() => {
+            if (typeof refreshProfileList === 'function') {
+                refreshProfileList();
+            }
+        }, 2000);
 
-        console.log('✅ Initialisation complète terminée');
+        console.log('✅ Initialisation terminée');
     } catch (error) {
-        console.error('❌ Erreur initialisation:', error);
-        alert('Erreur lors de l\'initialisation: ' + error.message);
+        console.error('❌ Erreur:', error);
     }
 });
