@@ -117,7 +117,7 @@ private:
     
     // Pages spécifiques
     static void showMainPage(const SystemConfig& config, float currentTemp, float currentHum, float heaterOutput);
-    static void showStatsPage(float currentTemp, float currentHum);
+    static void showStatsPage(int16_t currentTemp, float currentHum);
     static void showSystemPage(const SystemConfig& config);
     static void showModesPage(const SystemConfig& config);
     static void showProfilePage(const SystemConfig& config);
@@ -125,7 +125,7 @@ private:
     // Utilitaires d'affichage
     static void drawHeader(const String& title);
     static void drawProgressBar(int x, int y, int width, int height, float percentage);
-    static void drawTemperatureBar(float temp, float min, float max);
+    static void drawTemperatureBar(int16_t temp, int16_t min, int16_t max);
     static String formatTime();
     static String getWiFiStatus();
 };

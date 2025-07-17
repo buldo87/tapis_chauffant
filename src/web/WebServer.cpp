@@ -145,7 +145,7 @@ void WebServerManager::handleApplyAllSettings(AsyncWebServerRequest *request, ui
         return;
     }
     
-    if (!validateJsonConfig(doc)) {
+    if (!WebServerManager::validateJsonConfig(doc)) {
         request->send(400, "text/plain", "Configuration invalide");
         return;
     }
@@ -337,40 +337,101 @@ bool WebServerManager::validateJsonConfig(const DynamicJsonDocument& doc) {
         }
     }
     
-    if (doc.containsKey("hysteresis")) {float hysteresis = doc["hysteresis"];
-if (hysteresis <= 0 || hysteresis > 10) {
-return false;
-}
-}
-if (doc.containsKey("Kp") || doc.containsKey("Ki") || doc.containsKey("Kd")) {
-    float kp = doc.containsKey("Kp") ? doc["Kp"].as<float>() : config.Kp;
-    float ki = doc.containsKey("Ki") ? doc["Ki"].as<float>() : config.Ki;
-    float kd = doc.containsKey("Kd") ? doc["Kd"].as<float>() : config.Kd;
-    
-    if (kp < 0 || kp > 100 || ki < 0 || ki > 100 || kd < 0 || kd > 100) {
-        return false;
+    if (doc.containsKey("hysteresis")) {
+        float hysteresis = doc["hysteresis"];
+        if (hysteresis <= 0 || hysteresis > 10) {
+            return false;
+        }
     }
+
+    if (doc.containsKey("Kp") || doc.containsKey("Ki") || doc.containsKey("Kd")) {
+        float kp = doc.containsKey("Kp") ? doc["Kp"].as<float>() : config.Kp;
+        float ki = doc.containsKey("Ki") ? doc["Ki"].as<float>() : config.Ki;
+        float kd = doc.containsKey("Kd") ? doc["Kd"].as<float>() : config.Kd;
+        
+        if (kp < 0 || kp > 100 || ki < 0 || ki > 100 || kd < 0 || kd > 100) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
-return true;
-
-}
 void WebServerManager::handleSaveConfiguration(AsyncWebServerRequest *request) {
-ConfigManager::requestSave();
-request->send(200, "text/plain", "Sauvegarde demandée");
+    ConfigManager::requestSave();
+    request->send(200, "text/plain", "Sauvegarde demandée");
 }
+
 void WebServerManager::handleHistory(AsyncWebServerRequest *request) {
-String json = "[";
-int total = historyFull ? MAX_HISTORY_RECORDS : historyIndex;
-bool first = true;
-for (int i = 0; i < total; i++) {
-    int idx = (historyIndex + i) % MAX_HISTORY_RECORDS;
-    HistoryRecord r = history[idx];
-    
-    if (r.timestamp == 0) continue;
-    
-    if (!first) json += ",";
-    first = false;
-    
-    json += String("{\"t\":") + r.timestamp + 
-            ",\"temp\":
+    AsyncResponseStream *response = request->beginResponseStream("application/json");
+    response->print("[");
+
+    int total = historyFull ? MAX_HISTORY_RECORDS : historyIndex;
+    bool first = true;
+
+    for (int i = 0; i < total; i++) {
+        int idx = (historyIndex + i) % MAX_HISTORY_RECORDS;
+        HistoryRecord r = history[idx];
+
+        if (r.timestamp == 0) continue;
+
+        if (!first) {
+            response->print(",");
+        }
+        first = false;
+
+        response->printf("{\"t\":%lu,\"temp\":%.1f,\"hum\":%.1f}", 
+                         (unsigned long)r.timestamp, 
+                         (float)r.temperature / 10.0f, 
+                         r.humidity);
+    }
+
+    response->print("]");
+    request->send(response);
+}
+
+// --- Implémentations des fonctions manquantes ---
+
+void WebServerManager::handleLoadProfile(AsyncWebServerRequest *request) {
+    request->send(501, "text/plain", "Not Implemented");
+}
+
+void WebServerManager::handleSaveProfile(AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
+    request->send(501, "text/plain", "Not Implemented");
+}
+
+void WebServerManager::handleDeleteProfile(AsyncWebServerRequest *request) {
+    request->send(501, "text/plain", "Not Implemented");
+}
+
+void WebServerManager::handleActivateProfile(AsyncWebServerRequest *request) {
+    request->send(501, "text/plain", "Not Implemented");
+}
+
+void WebServerManager::handleSaveDayData(AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
+    request->send(501, "text/plain", "Not Implemented");
+}
+
+void WebServerManager::handleGetYearlyTemperatures(AsyncWebServerRequest *request) {
+    request->send(501, "text/plain", "Not Implemented");
+}
+
+void WebServerManager::handleCapture(AsyncWebServerRequest *request) {
+    request->send(501, "text/plain", "Not Implemented");
+}
+
+void WebServerManager::handleVideoStream(AsyncWebServerRequest *request) {
+    request->send(501, "text/plain", "Not Implemented");
+}
+
+void WebServerManager::handleMJPEG(AsyncWebServerRequest *request) {
+    request->send(501, "text/plain", "Not Implemented");
+}
+
+void WebServerManager::handleSensorData(AsyncWebServerRequest *request) {
+    request->send(501, "text/plain", "Not Implemented");
+}
+
+String WebServerManager::createJsonResponse(const SystemConfig& config) {
+    return "{}";
+}

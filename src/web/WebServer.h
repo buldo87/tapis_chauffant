@@ -6,6 +6,8 @@
 
 // La classe WebServerManager gère la configuration et la gestion du serveur web.
 // Elle est conçue comme une classe statique pour regrouper les handlers (gestionnaires de requêtes).
+#include <ArduinoJson.h>
+
 class WebServerManager {
 public:
     /**

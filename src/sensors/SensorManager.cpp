@@ -97,7 +97,7 @@ bool SensorManager::readSensorWithRetry(float& temp, float& hum, int maxRetries)
 
 }
 
-bool SensorManager::validateReading(int16_t temp, float hum) { // temp est maintenant int16_t
+bool SensorManager::validateReading(int16_t temp, float hum) {
     // Validation des plages de température et humidité
     if (temp < (int16_t)(-40.0f * 10) || temp > (int16_t)(100.0f * 10)) { // Comparaison avec int16_t
         LOG_WARN("SENSORS", "Température hors plage: %.1f°C", (float)temp / 10.0f);

@@ -112,7 +112,7 @@ private:
     static void applyOutput(float output);
     static void updateOnOffControl(int16_t currentTemp, int16_t targetTemp); // Accepte int16_t
     static void updatePIDControl(int16_t currentTemp, int16_t targetTemp); // Accepte int16_t
-    static bool isSafeToHeat(const SafetySystem& safety);
+    static bool isSafeToHeat();
 };
 
 #endif

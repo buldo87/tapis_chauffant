@@ -30,7 +30,7 @@ bool DisplayManager::initialize(Adafruit_SSD1306* displayPtr, SemaphoreHandle_t 
 }
 
 void DisplayManager::showPage(int pageIndex, const SystemConfig& config, const SafetySystem& safety, 
-                             int16_t currentTemp, float currentHum, float heaterOutput) { // currentTemp is int16_t
+                             float currentTemp, float currentHum, float heaterOutput) {
     
     if (!display) return;
     
@@ -44,7 +44,7 @@ void DisplayManager::showPage(int pageIndex, const SystemConfig& config, const S
     display->setTextColor(SSD1306_WHITE);
     
     // Mode sécurité prioritaire
-    if (safety.currentLevel > SAFETY_NORMAL) {
+    if (SafetySystem::getCurrentLevel() > SAFETY_NORMAL) { // safety object removed
         showSafetyAlert(safety);
         updateSafe();
         return;
@@ -76,7 +76,7 @@ void DisplayManager::showPage(int pageIndex, const SystemConfig& config, const S
     updateSafe();
 }
 
-void DisplayManager::showMainPage(const SystemConfig& config, int16_t currentTemp, float currentHum, float heaterOutput) { // currentTemp is int16_t
+void DisplayManager::showMainPage(const SystemConfig& config, float currentTemp, float currentHum, float heaterOutput) {
     drawHeader("VIVARIUM v2.0");
     
     display->setTextSize(1);
@@ -84,10 +84,10 @@ void DisplayManager::showMainPage(const SystemConfig& config, int16_t currentTem
     
     // Température actuelle vs consigne
     float targetTemp = config.getSetpointFloat();
-    display->printf("Temp: %.1fC (%.1fC)\n", (float)currentTemp / 10.0f, targetTemp); // Convert int16_t to float
+    display->printf("Temp: %.1fC (%.1fC)\n", currentTemp, targetTemp);
     
     // Barre de température visuelle
-    drawTemperatureBar(currentTemp, config.globalMinTempSet, config.globalMaxTempSet); // Pass int16_t
+    drawTemperatureBar(currentTemp * 10, config.globalMinTempSet, config.globalMaxTempSet);
     
     display->setCursor(0, 32);
     display->printf("Hum:  %.0f%%\n", currentHum);
@@ -115,8 +115,8 @@ void DisplayManager::showStatsPage(int16_t currentTemp, float currentHum) { // c
     display->setTextSize(1);
     display->setCursor(0, 16);
     
-    display->printf("T Max: %.1fC\n", (float)SensorManager::getMaxTemperature() / 10.0f); // Convert int16_t to float
-    display->printf("T Min: %.1fC\n", (float)SensorManager::getMinTemperature() / 10.0f); // Convert int16_t to float
+    display->printf("T Max: %.1fC\n", (float)SensorManager::getMaxTemperature() / 10.0f);
+    display->printf("T Min: %.1fC\n", (float)SensorManager::getMinTemperature() / 10.0f);
     display->printf("H Max: %.0f%%\n", SensorManager::getMaxHumidity());
     display->printf("H Min: %.0f%%\n", SensorManager::getMinHumidity());
     
@@ -173,52 +173,14 @@ void DisplayManager::showProfilePage(const SystemConfig& config) {
 }
 
 void DisplayManager::showSafetyAlert(const SafetySystem& safety) {
-    // Effet clignotant pour l'urgence
-    static bool blinkState = false;
-    static unsigned long lastBlink = 0;
-    
-    if (millis() - lastBlink > 500) {
-        blinkState = !blinkState;
-        lastBlink = millis();
-    }
-    
-    if (safety.currentLevel == SAFETY_EMERGENCY && blinkState) {
-        display->fillScreen(SSD1306_WHITE);
-        display->setTextColor(SSD1306_BLACK);
-    }
-    
+    display->clearDisplay();
     display->setTextSize(2);
+    display->setTextColor(SSD1306_WHITE);
     display->setCursor(0, 0);
-    
-    switch (safety.currentLevel) {
-        case SAFETY_WARNING:
-            display->println("ALERTE!");
-            break;
-        case SAFETY_CRITICAL:
-            display->println("CRITIQUE");
-            break;
-        case SAFETY_EMERGENCY:
-            display->println("URGENCE!");
-            break;
-        default:
-            display->println("ERREUR");
-            break;
-    }
-    
+    display->println("ALERTE!");
     display->setTextSize(1);
-    display->setCursor(0, 20);
-    display->printf("Niveau: %d\n", safety.currentLevel);
-    display->setCursor(0, 32);
-    
-    // Afficher le message d'erreur (tronqué)
-    String msg = safety.lastErrorMessage;
-    if (msg.length() > 21) {
-        msg = msg.substring(0, 18) + "...";
-    }
-    display->println(msg);
-    
-    display->setCursor(0, 48);
-    display->printf("T:%.1f H:%.0f%%", (float)safety.lastKnownGoodTemp / 10.0f, safety.lastKnownGoodHum); // Convert int16_t to float
+    display->println(safety.lastErrorMessage);
+    display->display();
 }
 
 void DisplayManager::showLogo() {
@@ -302,7 +264,7 @@ void DisplayManager::drawProgressBar(int x, int y, int width, int height, float 
     }
 }
 
-void DisplayManager::drawTemperatureBar(int16_t temp, int16_t min, int16_t max) { // temp, min, max are int16_t
+void DisplayManager::drawTemperatureBar(int16_t temp, int16_t min, int16_t max) {
     int barY = 24;
     int barHeight = 6;
     int barWidth = display->width() - 10;

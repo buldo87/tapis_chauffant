@@ -1,4 +1,5 @@
 #include "CameraManager.h"
+#include "../utils/Logger.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -20,28 +21,28 @@
 #define CAM_PIN_HREF    7
 #define CAM_PIN_PCLK    13
 
-// Variables statiques
+// Définition des membres statiques
 bool CameraManager::initialized = false;
 String CameraManager::currentResolution = "qvga";
 int CameraManager::currentQuality = 12;
 camera_config_t CameraManager::cameraConfig = {};
 
-bool CameraManager::initialize(const String& resolution) {
+bool CameraManager::initialize(SystemConfig& config) {
     if (initialized) {
-        Serial.println("⚠️ Caméra déjà initialisée");
+        LOG_WARN("CAMERA", "Caméra déjà initialisée");
         return true;
     }
     
-    Serial.println("📷 Initialisation de la caméra...");
+    LOG_INFO("CAMERA", "Initialisation de la caméra...");
     
     configurePins();
-    if (!configureSettings(resolution)) {
+    if (!configureSettings(config.cameraResolution)) {
         return false;
     }
     
     esp_err_t err = esp_camera_init(&cameraConfig);
     if (err != ESP_OK) {
-        Serial.printf("❌ Erreur d'initialisation caméra: 0x%x\n", err);
+        LOG_ERROR("CAMERA", "Erreur d'initialisation caméra: 0x%x", err);
         return false;
     }
     
@@ -50,15 +51,15 @@ bool CameraManager::initialize(const String& resolution) {
     
     // Test de capture
     if (!testCapture()) {
-        Serial.println("❌ Test de capture échoué");
+        LOG_ERROR("CAMERA", "Test de capture échoué");
         shutdown();
         return false;
     }
     
     initialized = true;
-    currentResolution = resolution;
+    currentResolution = config.cameraResolution;
     
-    Serial.printf("✅ Caméra initialisée en résolution %s\n", resolution.c_str());
+    LOG_INFO("CAMERA", "Caméra initialisée en résolution %s", config.cameraResolution.c_str());
     printCameraInfo();
     
     return true;
@@ -68,7 +69,7 @@ void CameraManager::shutdown() {
     if (initialized) {
         esp_camera_deinit();
         initialized = false;
-        Serial.println("📷 Caméra arrêtée");
+        LOG_INFO("CAMERA", "Caméra arrêtée");
     }
 }
 
@@ -103,7 +104,7 @@ bool CameraManager::configureSettings(const String& resolution) {
     // Résolution adaptative
     framesize_t frameSize = stringToFramesize(resolution);
     if (frameSize == FRAMESIZE_INVALID) {
-        Serial.printf("❌ Résolution invalide: %s\n", resolution.c_str());
+        LOG_ERROR("CAMERA", "Résolution invalide: %s", resolution.c_str());
         return false;
     }
     
@@ -195,7 +196,7 @@ void CameraManager::handleCapture(AsyncWebServerRequest *request) {
     request->send(response);
 }
 
-void CameraManager::handleMJPEGStream(AsyncWebServerRequest *request) {
+void CameraManager::handleStream(AsyncWebServerRequest *request) { // Renommée pour correspondre au .h
     if (!initialized) {
         request->send(503, "text/plain", "Caméra non initialisée");
         return;
@@ -281,7 +282,7 @@ void CameraManager::releaseFrame(camera_fb_t* frame) {
 
 // === Configuration dynamique ===
 
-bool CameraManager::setResolution(const String& resolution) {
+bool CameraManager::setResolution(const String& resolution, SystemConfig& config) { // Signature corrigée
     if (!initialized) return false;
     
     framesize_t frameSize = stringToFramesize(resolution);
@@ -292,34 +293,20 @@ bool CameraManager::setResolution(const String& resolution) {
     
     if (s->set_framesize(s, frameSize) == 0) {
         currentResolution = resolution;
-        Serial.printf("✅ Résolution changée en %s\n", resolution.c_str());
+        config.cameraResolution = resolution; // Mettre à jour la config
+        LOG_INFO("CAMERA", "Résolution changée en %s", resolution.c_str());
         return true;
     }
     
     return false;
 }
 
-bool CameraManager::setQuality(int quality) {
-    if (!initialized) return false;
-    
-    sensor_t* s = esp_camera_sensor_get();
-    if (!s) return false;
-    
-    quality = constrain(quality, 0, 63);
-    if (s->set_quality(s, quality) == 0) {
-        currentQuality = quality;
-        Serial.printf("✅ Qualité changée à %d\n", quality);
-        return true;
-    }
-    
-    return false;
-}
-
-bool CameraManager::setFramerate(int targetFps) {
+void CameraManager::setFramerate(int targetFps, SystemConfig& config) { // Signature corrigée
     // Cette fonction est une simplification, le framerate dépend de plusieurs facteurs
-    if (targetFps > 20) return setResolution("qvga");
-    if (targetFps > 10) return setResolution("vga");
-    return setResolution("svga");
+    // Pour l'instant, elle ne fait que changer la résolution
+    if (targetFps > 20) setResolution("qvga", config);
+    else if (targetFps > 10) setResolution("vga", config);
+    else setResolution("svga", config);
 }
 
 // === Utilitaires ===
@@ -336,15 +323,15 @@ framesize_t CameraManager::stringToFramesize(const String& resolution) {
 void CameraManager::printCameraInfo() {
     sensor_t* s = esp_camera_sensor_get();
     if (s) {
-        Serial.printf("Sensor: %s, PID: 0x%02x, VER: 0x%02x, MID: 0x%04x\n",
-                      "OV5640", s->id.PID, s->id.VERSION, s->id.MID);
+        LOG_INFO("CAMERA", "Sensor: %s, PID: 0x%02x, VER: 0x%02x, MID: 0x%04x",
+                      "OV5640", s->id.PID, 0, 0);
     }
 }
 
 float CameraManager::measureFramerate(int sampleCount) {
     if (!initialized) return 0.0f;
     
-    Serial.printf("🎥 Mesure du framerate (%d frames)...\n", sampleCount);
+    LOG_INFO("CAMERA", "Mesure du framerate (%d frames)...", sampleCount);
     
     unsigned long start = millis();
     int frames = 0;
@@ -363,7 +350,7 @@ float CameraManager::measureFramerate(int sampleCount) {
     
     float fps = (frames * 1000.0f) / duration;
     
-    Serial.printf("📊 Résultat: %d frames en %lu ms = %.1f FPS\n", frames, duration, fps);
+    LOG_INFO("CAMERA", "Résultat: %d frames en %lu ms = %.1f FPS", frames, duration, fps);
     return fps;
 }
 

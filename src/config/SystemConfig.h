@@ -27,20 +27,7 @@ struct HistoryRecord {
     float humidity;
 };
 
-struct SafetySystem {
-    SafetyLevel currentLevel = SAFETY_NORMAL;
-    unsigned long lastSensorRead = 0;
-    unsigned long lastValidTemperature = 0;
-    unsigned long lastValidHumidity = 0;
-    unsigned long safetyActivatedTime = 0;
-    int consecutiveFailures = 0;
-    int temperatureOutOfRangeCount = 0;
-    int humidityOutOfRangeCount = 0;
-    bool emergencyShutdown = false;
-    String lastErrorMessage = "";
-    int16_t lastKnownGoodTemp = 220; // 22.0°C
-    float lastKnownGoodHum = 50.0f;
-};
+
 
 // === CONFIGURATION PRINCIPALE ===
 struct SystemConfig {

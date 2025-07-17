@@ -49,7 +49,7 @@ bool HeaterControl::initialize(int heaterPin) {
 }
 
 void HeaterControl::updateControl(int16_t currentTemp, int16_t targetTemp, const SystemConfig& config, const SafetySystem& safety) {
-    if (!isSafeToHeat(safety)) {
+    if (!isSafeToHeat()) { // safety object removed
         emergencyStop();
         return;
     }
@@ -66,7 +66,7 @@ void HeaterControl::updateControl(int16_t currentTemp, int16_t targetTemp, const
     
     // Limitation en mode warning
     float finalOutput = currentOutput;
-    if (SafetySystem::getCurrentLevel(safety) == SAFETY_WARNING) {
+    if (SafetySystem::getCurrentLevel() == SAFETY_WARNING) { // safety object removed
         finalOutput = min(finalOutput, 128.0f);
         LOG_WARN("HEATER", "Limitation chauffage en mode WARNING: %.0f -> %.0f", currentOutput, finalOutput);
     }
@@ -136,10 +136,10 @@ void HeaterControl::applyOutput(float output) {
     analogWrite(pin, (int)currentOutput);
 }
 
-bool HeaterControl::isSafeToHeat(const SafetySystem& safety) {
-    SafetyLevel level = SafetySystem::getCurrentLevel(safety);
+bool HeaterControl::isSafeToHeat() {
+    SafetyLevel level = SafetySystem::getCurrentLevel(); // safety object removed
     
-    if (SafetySystem::isEmergencyShutdown(safety)) {
+    if (SafetySystem::isEmergencyShutdown()) { // safety object removed
         return false;
     }
     

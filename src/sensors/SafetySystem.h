@@ -8,59 +8,66 @@
 // Elle est conçue comme une classe statique pour une gestion globale de la sécurité.
 class SafetySystem {
 public:
+    // Membres de données statiques
+    static SafetyLevel currentLevel;
+    static unsigned long lastSensorRead;
+    static unsigned long lastValidTemperature;
+    static unsigned long lastValidHumidity;
+    static unsigned long safetyActivatedTime;
+    static int consecutiveFailures;
+    static int temperatureOutOfRangeCount;
+    static int humidityOutOfRangeCount;
+    static bool emergencyShutdown;
+    static String lastErrorMessage;
+    static int16_t lastKnownGoodTemp; // Changé en int16_t
+    static float lastKnownGoodHum;
+
     /**
      * @brief Initialise l'état du système de sécurité.
-     * @param safety Référence à la structure de l'état de sécurité.
      */
-    static void initialize(SafetySystem& safety);
+    static void initialize();
 
     /**
      * @brief Vérifie les conditions actuelles et met à jour le niveau de sécurité.
-     * @param safety Référence à la structure de l'état de sécurité.
-     * @param currentTemp Température actuelle.
+     * @param currentTemp Température actuelle (en int16_t).
      * @param currentHum Humidité actuelle.
      */
-    static void checkConditions(SafetySystem& safety, float currentTemp, float currentHum);
+    static void checkConditions(int16_t currentTemp, float currentHum);
 
     /**
      * @brief Fait monter le niveau de sécurité.
-     * @param safety Référence à la structure de l'état de sécurité.
      * @param newLevel Le nouveau niveau de sécurité.
      * @param reason La raison de l'escalade.
      */
-    static void escalateSafety(SafetySystem& safety, SafetyLevel newLevel, const String& reason);
+    static void escalateSafety(SafetyLevel newLevel, const String& reason);
 
     /**
      * @brief Fait descendre le niveau de sécurité.
-     * @param safety Référence à la structure de l'état de sécurité.
      */
-    static void downgradeSafety(SafetySystem& safety);
+    static void downgradeSafety();
 
     /**
      * @brief Réinitialise complètement le système de sécurité.
-     * @param safety Référence à la structure de l'état de sécurité.
      */
-    static void resetSafety(SafetySystem& safety);
+    static void resetSafety();
 
     /**
      * @brief Vérifie si le système est en arrêt d'urgence.
-     * @param safety Référence à la structure de l'état de sécurité.
      * @return true si le système est en arrêt d'urgence, false sinon.
      */
-    static bool isEmergencyShutdown(const SafetySystem& safety) { return safety.emergencyShutdown; }
+    static bool isEmergencyShutdown() { return emergencyShutdown; }
 
     /**
      * @brief Obtient le niveau de sécurité actuel.
-     * @param safety Référence à la structure de l'état de sécurité.
      * @return Le niveau de sécurité actuel.
      */
-    static SafetyLevel getCurrentLevel(const SafetySystem& safety) { return safety.currentLevel; }
+    static SafetyLevel getCurrentLevel() { return currentLevel; }
     
 private:
-    static void activateWarningMode(SafetySystem& safety, const String& reason);
-    static void activateCriticalMode(SafetySystem& safety, const String& reason);
-    static void activateEmergencyMode(SafetySystem& safety, const String& reason);
-    static void exitSafeMode(SafetySystem& safety);
+    static void activateWarningMode(const String& reason);
+    static void activateCriticalMode(const String& reason);
+    static void activateEmergencyMode(const String& reason);
+    static void exitSafeMode();
 };
 
 #endif

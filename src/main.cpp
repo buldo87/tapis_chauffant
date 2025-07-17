@@ -24,7 +24,7 @@ using namespace HardwareConstants;
 
 // === VARIABLES GLOBALES ===
 SystemConfig config;
-SafetySystem safety;
+// SafetySystem safety; // SafetySystem est maintenant une classe statique, pas besoin d'instance
 
 // Variables de mesure
 int16_t internalTemp = 0; // Changé en int16_t
@@ -51,7 +51,7 @@ int16_t minTemperature = 32767;  // Changé en int16_t (max value)
 AsyncWebServer server(80);
 PID myPID(&input, &output, (double*)&config.setpoint, config.Kp, config.Ki, config.Kd, DIRECT); // Cast config.setpoint to double*
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
-Adafruit_NeoPixel pixels(NUMPIXELS, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel pixels(NUMPIXELS, APP_PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800); // Utilise APP_PIN_NEOPIXEL
 
 // Synchronisation
 SemaphoreHandle_t i2cMutex = NULL;
@@ -217,7 +217,7 @@ void initSensors() {
     display.display();
     
     // Système de sécurité
-    SafetySystem::initialize(safety);
+    SafetySystem::initialize(); // Appel sans paramètre
     
     LOG_INFO("SENSORS", "Initialisation réussie.");
 }
@@ -298,7 +298,7 @@ void mainApplicationTask(void *pvParameters) {
             }
             
             // Vérification sécurité
-            SafetySystem::checkConditions(safety, internalTemp, internalHum);
+            SafetySystem::checkConditions(internalTemp, internalHum); // Appel sans paramètre safety
         }
         
         // === PRIORITÉ 2 : SAUVEGARDE CONFIG ===
@@ -307,7 +307,7 @@ void mainApplicationTask(void *pvParameters) {
         // === PRIORITÉ 3 : AFFICHAGE (moins critique) ===
         if (now - lastDisplayUpdate >= 1000) {
             lastDisplayUpdate = now;
-            if (safety.currentLevel == SAFETY_NORMAL) {
+            if (SafetySystem::getCurrentLevel() == SAFETY_NORMAL) { // Appel sans paramètre safety
                 renderOLEDPage(displayPage);
                 updateDisplaySafe();
             }
@@ -316,7 +316,7 @@ void mainApplicationTask(void *pvParameters) {
         // === PRIORITÉ 4 : CHANGEMENT DE PAGE ===
         if (now - lastPageChange >= 10000) {
             lastPageChange = now;
-            if (safety.currentLevel == SAFETY_NORMAL) {
+            if (SafetySystem::getCurrentLevel() == SAFETY_NORMAL) { // Appel sans paramètre safety
                 displayPage = (displayPage + 1) % pageCount;
             }
         }
@@ -351,11 +351,11 @@ int16_t getCurrentTargetTemperature() { // Retourne int16_t
 }
 
 void controlHeater(int16_t currentTemperature) { // Accepte int16_t
-    if (SafetySystem::isEmergencyShutdown(safety) || 
-        SafetySystem::getCurrentLevel(safety) >= SAFETY_CRITICAL) {
+    if (SafetySystem::isEmergencyShutdown() || 
+        SafetySystem::getCurrentLevel() >= SAFETY_CRITICAL) { // Appel sans paramètre safety
         output = 0;
         analogWrite(HEATER_PIN, 0);
-        LOG_WARN("HEATER", "Chauffage bloqué par le système de sécurité (Niveau: %d)", SafetySystem::getCurrentLevel(safety));
+        LOG_WARN("HEATER", "Chauffage bloqué par le système de sécurité (Niveau: %d)", SafetySystem::getCurrentLevel()); // Appel sans paramètre safety
         return;
     }
     
@@ -390,7 +390,7 @@ void controlHeater(int16_t currentTemperature) { // Accepte int16_t
     }
     
     // Limitation en mode warning
-    if (SafetySystem::getCurrentLevel(safety) == SAFETY_WARNING) {
+    if (SafetySystem::getCurrentLevel() == SAFETY_WARNING) { // Appel sans paramètre safety
         output = min(output, 128.0);
     }
     
@@ -399,7 +399,7 @@ void controlHeater(int16_t currentTemperature) { // Accepte int16_t
 
 void addToHistory(int16_t temperature, float humidity) { // Accepte int16_t
     time_t now = time(nullptr);
-    history[historyIndex] = { now, temperature, humidity }; // temperature est déjà int16_t
+    history[historyIndex] = { now, temperature, humidity };
     historyIndex = (historyIndex + 1) % MAX_HISTORY_RECORDS;
     if (historyIndex == 0) historyFull = true;
     
@@ -430,7 +430,7 @@ void renderOLEDPage(int page) {
             display.printf("T Max: %.1fC\n", (float)maxTemperature / 10.0f);
             display.printf("T Min: %.1fC\n", (float)minTemperature / 10.0f);
             display.printf("Capteur: %s\n", SensorManager::isDataValid() ? "OK" : "ERR");
-            display.printf("Securite: %d", safety.currentLevel);
+            display.printf("Securite: %d", SafetySystem::getCurrentLevel()); // Appel sans paramètre safety
             break;
             
         case 2: // Heure et système

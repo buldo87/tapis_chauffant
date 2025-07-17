@@ -38,7 +38,7 @@ private:
     static int consecutiveFailures;
     
     static bool readSensorWithRetry(float& temp, float& hum, int maxRetries = 3);
-    static bool validateReading(float temp, float hum);
+    static bool validateReading(int16_t temp, float hum);
     static void updateStatistics(int16_t temp, float hum); // Accepte int16_t pour temp
 };
 

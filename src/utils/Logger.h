@@ -2,7 +2,7 @@
 #define LOGGER_H
 
 #include <Arduino.h>
-#include "SystemConfig.h"
+#include "../config/SystemConfig.h"
 
 // Énumération des niveaux de log
 enum LogLevel {
