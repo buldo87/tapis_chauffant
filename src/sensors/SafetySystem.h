@@ -55,7 +55,12 @@ public:
      * @brief Vérifie si le système est en arrêt d'urgence.
      * @return true si le système est en arrêt d'urgence, false sinon.
      */
-    static bool isEmergencyShutdown() { return emergencyShutdown; }
+    static bool isEmergencyShutdown();
+    static int getConsecutiveFailures();
+    static unsigned long getLastSensorReadTime();
+    static int16_t getLastKnownGoodTemp();
+    static float getLastKnownGoodHum();
+    static String getLastErrorMessage();
 
     /**
      * @brief Obtient le niveau de sécurité actuel.

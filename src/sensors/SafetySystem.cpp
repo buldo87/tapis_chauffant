@@ -236,3 +236,29 @@ void SafetySystem::resetSafety() {
     initialize();
     LOG_INFO("SAFETY", "Système de sécurité réinitialisé");
 }
+
+
+
+bool SafetySystem::isEmergencyShutdown() {
+    return emergencyShutdown;
+}
+
+int SafetySystem::getConsecutiveFailures() {
+    return consecutiveFailures;
+}
+
+unsigned long SafetySystem::getLastSensorReadTime() {
+    return lastSensorRead;
+}
+
+int16_t SafetySystem::getLastKnownGoodTemp() {
+    return lastKnownGoodTemp;
+}
+
+float SafetySystem::getLastKnownGoodHum() {
+    return lastKnownGoodHum;
+}
+
+String SafetySystem::getLastErrorMessage() {
+    return lastErrorMessage;
+}

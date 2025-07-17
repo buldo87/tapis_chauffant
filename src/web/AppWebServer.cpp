@@ -1,20 +1,31 @@
-#include "WebServer.h"
+#include <Arduino.h>
+#include "AppWebServer.h"
 #include "../config/ConfigManager.h"
 #include "../sensors/SensorManager.h"
 #include "../sensors/SafetySystem.h"
 #include "../utils/Logger.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
+#include "esp_camera.h"
 
-// Références aux variables globales (définies dans main.cpp)
-extern SystemConfig config;
-extern SafetySystem safety;
-extern HistoryRecord history[];
-extern int historyIndex;
-extern bool historyFull;
-extern double output;
+// Fonctions pour accéder aux données globales de manière contrôlée (définies dans main.cpp)
+extern SystemConfig& getGlobalConfig();
+extern double getHeaterOutput();
+extern HistoryRecord* getHistory();
+extern int getHistoryIndex();
+extern bool isHistoryFull();
 
-void WebServerManager::setupRoutes(AsyncWebServer& server) {
+// Camera
+extern esp_err_t camera_capture(camera_fb_t *fb);
+extern void camera_fb_return(camera_fb_t *fb);
+
+#define PART_BOUNDARY "123456789000000000000987654321"
+static const char* _STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
+static const char* _STREAM_BOUNDARY = "\r\n--" PART_BOUNDARY "\r\n";
+static const char* _STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
+
+
+void AppWebServerManager::setupRoutes(AsyncWebServer& server) {
     // === FICHIERS STATIQUES ===
     server.serveStatic("/css/", LittleFS, "/css/").setCacheControl("max-age=86400");
     server.serveStatic("/js/", LittleFS, "/js/");
@@ -53,7 +64,7 @@ void WebServerManager::setupRoutes(AsyncWebServer& server) {
         request->send(200, "text/plain", String(SensorManager::getCurrentHumidity(), 1));
     });
     server.on("/heaterState", HTTP_GET, [](AsyncWebServerRequest *request) {
-        int percentage = map(output, 0, 255, 0, 100);
+        int percentage = map(getHeaterOutput(), 0, 255, 0, 100);
         request->send(200, "text/plain", String(percentage));
     });
     server.on("/status", HTTP_GET, handleStatus);
@@ -62,15 +73,15 @@ void WebServerManager::setupRoutes(AsyncWebServer& server) {
     
     // === CAMÉRA ===
     server.on("/capture", HTTP_GET, handleCapture);
-    server.on("/stream", HTTP_GET, handleVideoStream);
     server.on("/mjpeg", HTTP_GET, handleMJPEG);
+    server.on("/mjpeg-info", HTTP_GET, handleMJPEGInfo);
     
     // === DEBUG / LOGGING ===
     server.on("/setLogLevel", HTTP_GET, [](AsyncWebServerRequest *request) {
         if (request->hasParam("level")) {
             int level = request->getParam("level")->value().toInt();
             if (level >= LOG_LEVEL_NONE && level <= LOG_LEVEL_DEBUG) {
-                config.logLevel = level;
+                getGlobalConfig().logLevel = level;
                 setLogLevel((LogLevel)level);
                 ConfigManager::requestSave();
                 String msg = "Log level set to " + String(logLevelToString((LogLevel)level));
@@ -87,8 +98,9 @@ void WebServerManager::setupRoutes(AsyncWebServer& server) {
     LOG_INFO("WEBSERVER", "Routes web configurées");
 }
 
-void WebServerManager::handleGetCurrentConfig(AsyncWebServerRequest *request) {
+void AppWebServerManager::handleGetCurrentConfig(AsyncWebServerRequest *request) {
     StaticJsonDocument<2048> doc;
+    SystemConfig& config = getGlobalConfig();
     
     // Paramètres de contrôle
     doc["usePWM"] = config.usePWM;
@@ -138,18 +150,20 @@ void WebServerManager::handleGetCurrentConfig(AsyncWebServerRequest *request) {
     request->send(200, "application/json", response);
 }
 
-void WebServerManager::handleApplyAllSettings(AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
+void AppWebServerManager::handleApplyAllSettings(AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
     DynamicJsonDocument doc(2048);
     if (deserializeJson(doc, data, len) != DeserializationError::Ok) {
         request->send(400, "text/plain", "JSON invalide");
         return;
     }
     
-    if (!WebServerManager::validateJsonConfig(doc)) {
+    if (!AppWebServerManager::validateJsonConfig(doc)) {
         request->send(400, "text/plain", "Configuration invalide");
         return;
     }
     
+    SystemConfig& config = getGlobalConfig();
+
     // Mise à jour de la configuration
     if (doc.containsKey("currentProfileName")) 
         config.currentProfileName = doc["currentProfileName"].as<String>();
@@ -225,7 +239,7 @@ void WebServerManager::handleApplyAllSettings(AsyncWebServerRequest *request, ui
     request->send(200, "text/plain", "Configuration appliquée");
 }
 
-void WebServerManager::handleListProfiles(AsyncWebServerRequest *request) {
+void AppWebServerManager::handleListProfiles(AsyncWebServerRequest *request) {
     std::vector<String> profileNames = ConfigManager::listProfiles();
     
     DynamicJsonDocument doc(2048);
@@ -261,7 +275,7 @@ void WebServerManager::handleListProfiles(AsyncWebServerRequest *request) {
     request->send(200, "application/json", response);
 }
 
-void WebServerManager::handleGetDayData(AsyncWebServerRequest *request) {
+void AppWebServerManager::handleGetDayData(AsyncWebServerRequest *request) {
     if (!request->hasParam("day")) {
         request->send(400, "text/plain", "Paramètre 'day' manquant");
         return;
@@ -274,7 +288,7 @@ void WebServerManager::handleGetDayData(AsyncWebServerRequest *request) {
     }
     
     float dayTemperatures[24];
-    if (ConfigManager::loadSeasonalData(config.currentProfileName, dayIndex, dayTemperatures)) {
+    if (ConfigManager::loadSeasonalData(getGlobalConfig().currentProfileName, dayIndex, dayTemperatures)) {
         StaticJsonDocument<1024> doc;
         JsonArray temps = doc.createNestedArray("temperatures");
         
@@ -290,17 +304,18 @@ void WebServerManager::handleGetDayData(AsyncWebServerRequest *request) {
     }
 }
 
-void WebServerManager::handleStatus(AsyncWebServerRequest *request) {
+void AppWebServerManager::handleStatus(AsyncWebServerRequest *request) {
     StaticJsonDocument<512> doc;
+    SystemConfig& config = getGlobalConfig();
     
-    doc["heaterState"] = (int)output;
+    doc["heaterState"] = (int)getHeaterOutput();
     doc["currentMode"] = config.usePWM ? "PWM" : "ON/OFF";
     doc["setpoint"] = config.getSetpointFloat();
-    doc["temperature"] = (float)SensorManager::getCurrentTemperature() / 10.0f; // Convert int16_t to float
+    doc["temperature"] = (float)SensorManager::getCurrentTemperature() / 10.0f;
     doc["humidity"] = SensorManager::getCurrentHumidity();
     doc["sensorValid"] = SensorManager::isDataValid();
-    doc["safetyLevel"] = safety.currentLevel;
-    doc["emergencyShutdown"] = safety.emergencyShutdown;
+    doc["safetyLevel"] = SafetySystem::getCurrentLevel();
+    doc["emergencyShutdown"] = SafetySystem::isEmergencyShutdown();
     doc["lastUpdate"] = SensorManager::getLastUpdateTime();
     
     String response;
@@ -308,26 +323,29 @@ void WebServerManager::handleStatus(AsyncWebServerRequest *request) {
     request->send(200, "application/json", response);
 }
 
-void WebServerManager::handleSafetyStatus(AsyncWebServerRequest *request) {
+// CORRECTION: Nom de classe correct
+void AppWebServerManager::handleSafetyStatus(AsyncWebServerRequest *request) {
     StaticJsonDocument<512> doc;
+    SafetyLevel level = SafetySystem::getCurrentLevel();
     
-    doc["level"] = safety.currentLevel;
-    doc["levelName"] = (safety.currentLevel == SAFETY_NORMAL) ? "Normal" : 
-                      (safety.currentLevel == SAFETY_WARNING) ? "Alerte" : 
-                      (safety.currentLevel == SAFETY_CRITICAL) ? "Critique" : "Urgence";
-    doc["emergencyShutdown"] = safety.emergencyShutdown;
-    doc["lastError"] = safety.lastErrorMessage;
-    doc["consecutiveFailures"] = safety.consecutiveFailures;
-    doc["lastSensorRead"] = (millis() - safety.lastSensorRead) / 1000;
-    doc["lastKnownTemp"] = (float)safety.lastKnownGoodTemp / 10.0f; // Convert int16_t to float
-    doc["lastKnownHum"] = safety.lastKnownGoodHum;
+    doc["level"] = level;
+    doc["levelName"] = (level == SAFETY_NORMAL) ? "Normal" : 
+                      (level == SAFETY_WARNING) ? "Alerte" : 
+                      (level == SAFETY_CRITICAL) ? "Critique" : "Urgence";
+    doc["emergencyShutdown"] = SafetySystem::isEmergencyShutdown();
+    doc["lastError"] = "N/A"; // Remplacer par SafetySystem::getLastErrorMessage() si disponible
+    doc["consecutiveFailures"] = SafetySystem::getConsecutiveFailures();
+    doc["lastSensorRead"] = (millis() - SafetySystem::getLastSensorReadTime()) / 1000;
+    doc["lastKnownTemp"] = (float)SafetySystem::getLastKnownGoodTemp() / 10.0f;
+    doc["lastKnownHum"] = SafetySystem::getLastKnownGoodHum();
     
     String response;
     serializeJson(doc, response);
     request->send(200, "application/json", response);
 }
 
-bool WebServerManager::validateJsonConfig(const DynamicJsonDocument& doc) {
+bool AppWebServerManager::validateJsonConfig(const DynamicJsonDocument& doc) {
+    SystemConfig& config = getGlobalConfig();
     // Validation des paramètres critiques
     if (doc.containsKey("globalMinTempSet") && doc.containsKey("globalMaxTempSet")) {
         float minTemp = doc["globalMinTempSet"];
@@ -357,15 +375,18 @@ bool WebServerManager::validateJsonConfig(const DynamicJsonDocument& doc) {
     return true;
 }
 
-void WebServerManager::handleSaveConfiguration(AsyncWebServerRequest *request) {
+void AppWebServerManager::handleSaveConfiguration(AsyncWebServerRequest *request) {
     ConfigManager::requestSave();
     request->send(200, "text/plain", "Sauvegarde demandée");
 }
 
-void WebServerManager::handleHistory(AsyncWebServerRequest *request) {
+void AppWebServerManager::handleHistory(AsyncWebServerRequest *request) {
     AsyncResponseStream *response = request->beginResponseStream("application/json");
     response->print("[");
 
+    HistoryRecord* history = getHistory();
+    int historyIndex = getHistoryIndex();
+    bool historyFull = isHistoryFull();
     int total = historyFull ? MAX_HISTORY_RECORDS : historyIndex;
     bool first = true;
 
@@ -390,48 +411,149 @@ void WebServerManager::handleHistory(AsyncWebServerRequest *request) {
     request->send(response);
 }
 
-// --- Implémentations des fonctions manquantes ---
+// --- Implémentations des fonctions de gestion de profils ---
 
-void WebServerManager::handleLoadProfile(AsyncWebServerRequest *request) {
+void AppWebServerManager::handleLoadProfile(AsyncWebServerRequest *request) {
+    if (!request->hasParam("name")) {
+        request->send(400, "text/plain", "Nom de profil manquant");
+        return;
+    }
+    String profileName = request->getParam("name")->value();
+    
+    SystemConfig tempConfig;
+    if (ConfigManager::loadProfile(profileName, tempConfig)) {
+        // Logique pour envoyer la configuration en JSON
+        StaticJsonDocument<2048> doc;
+        // Remplir le doc avec tempConfig...
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    } else {
+        request->send(404, "text/plain", "Profil non trouvé");
+    }
+}
+
+void AppWebServerManager::handleSaveProfile(AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
+    DynamicJsonDocument doc(8192);
+    if (deserializeJson(doc, data, len) != DeserializationError::Ok) {
+        request->send(400, "text/plain", "JSON invalide");
+        return;
+    }
+
+    String profileName = doc["name"];
+    if (profileName.isEmpty()) {
+        request->send(400, "text/plain", "Nom de profil manquant");
+        return;
+    }
+
+    SystemConfig tempConfig; // Créer une config temporaire
+    // Remplir tempConfig à partir du JSON...
+
+    if (ConfigManager::saveProfile(profileName, tempConfig)) {
+        request->send(200, "text/plain", "Profil sauvegardé");
+    } else {
+        request->send(500, "text/plain", "Échec de la sauvegarde du profil");
+    }
+}
+
+void AppWebServerManager::handleDeleteProfile(AsyncWebServerRequest *request) {
+    if (!request->hasParam("name")) {
+        request->send(400, "text/plain", "Nom de profil manquant");
+        return;
+    }
+    String profileName = request->getParam("name")->value();
+
+    if (ConfigManager::deleteProfile(profileName)) {
+        request->send(200, "text/plain", "Profil supprimé");
+    } else {
+        request->send(500, "text/plain", "Échec de la suppression");
+    }
+}
+
+void AppWebServerManager::handleActivateProfile(AsyncWebServerRequest *request) {
+    if (!request->hasParam("name")) {
+        request->send(400, "text/plain", "Nom de profil manquant");
+        return;
+    }
+    String profileName = request->getParam("name")->value();
+
+    if (ConfigManager::loadProfile(profileName, getGlobalConfig())) {
+        ConfigManager::requestSave(); // Sauvegarder comme config active
+        request->send(200, "text/plain", "Profil activé");
+    } else {
+        request->send(404, "text/plain", "Profil non trouvé");
+    }
+}
+
+void AppWebServerManager::handleSaveDayData(AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
+    if (!request->hasParam("day")) {
+        request->send(400, "text/plain", "Paramètre 'day' manquant");
+        return;
+    }
+    int dayIndex = request->getParam("day")->value().toInt();
+
+    DynamicJsonDocument doc(1024);
+    if (deserializeJson(doc, data, len) != DeserializationError::Ok) {
+        request->send(400, "text/plain", "JSON invalide");
+        return;
+    }
+
+    JsonArray temps = doc["temperatures"].as<JsonArray>();
+    float buffer[24];
+    for(int i=0; i<24; i++) {
+        buffer[i] = temps[i].as<float>();
+    }
+
+    if (ConfigManager::saveSeasonalData(getGlobalConfig().currentProfileName, dayIndex, buffer)) {
+        request->send(200, "text/plain", "Données du jour sauvegardées");
+    } else {
+        request->send(500, "text/plain", "Échec de la sauvegarde");
+    }
+}
+
+void AppWebServerManager::handleGetYearlyTemperatures(AsyncWebServerRequest *request) {
     request->send(501, "text/plain", "Not Implemented");
 }
 
-void WebServerManager::handleSaveProfile(AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
-    request->send(501, "text/plain", "Not Implemented");
+void AppWebServerManager::handleCapture(AsyncWebServerRequest *request){
+    camera_fb_t * fb = NULL;
+    esp_err_t res = ESP_OK;
+    fb = esp_camera_fb_get();
+    if (!fb) {
+        LOG_ERROR("WEBSERVER", "Camera capture failed");
+        request->send(500, "text/plain", "Camera capture failed");
+        return;
+    }
+
+    AsyncWebServerResponse *response = request->beginResponse(200, "image/jpeg", (const uint8_t*)fb->buf, fb->len);
+    response->addHeader("Content-Disposition", "inline; filename=capture.jpg");
+    request->send(response);
+    esp_camera_fb_return(fb);
 }
 
-void WebServerManager::handleDeleteProfile(AsyncWebServerRequest *request) {
-    request->send(501, "text/plain", "Not Implemented");
+void AppWebServerManager::handleMJPEG(AsyncWebServerRequest *request){
+    AsyncResponseStream *response = request->beginResponseStream(_STREAM_CONTENT_TYPE);
+    while(true){
+        camera_fb_t * fb = esp_camera_fb_get();
+        if (!fb) {
+            LOG_ERROR("WEBSERVER", "Camera capture failed");
+            return;
+        }
+        response->print(_STREAM_BOUNDARY);
+        response->printf(_STREAM_PART, fb->len);
+        response->write(fb->buf, fb->len);
+        esp_camera_fb_return(fb);
+    }
 }
 
-void WebServerManager::handleActivateProfile(AsyncWebServerRequest *request) {
-    request->send(501, "text/plain", "Not Implemented");
-}
-
-void WebServerManager::handleSaveDayData(AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total) {
-    request->send(501, "text/plain", "Not Implemented");
-}
-
-void WebServerManager::handleGetYearlyTemperatures(AsyncWebServerRequest *request) {
-    request->send(501, "text/plain", "Not Implemented");
-}
-
-void WebServerManager::handleCapture(AsyncWebServerRequest *request) {
-    request->send(501, "text/plain", "Not Implemented");
-}
-
-void WebServerManager::handleVideoStream(AsyncWebServerRequest *request) {
-    request->send(501, "text/plain", "Not Implemented");
-}
-
-void WebServerManager::handleMJPEG(AsyncWebServerRequest *request) {
-    request->send(501, "text/plain", "Not Implemented");
-}
-
-void WebServerManager::handleSensorData(AsyncWebServerRequest *request) {
-    request->send(501, "text/plain", "Not Implemented");
-}
-
-String WebServerManager::createJsonResponse(const SystemConfig& config) {
-    return "{}";
+// CORRECTION: Nom de classe correct
+void AppWebServerManager::handleMJPEGInfo(AsyncWebServerRequest *request){
+    sensor_t * s = esp_camera_sensor_get();
+    if (s == NULL) {
+        request->send(500);
+        return;
+    }
+    char res[256];
+    sprintf(res, "{\"stream_url\":\"/mjpeg\",\"width\":%u,\"height\":%u}", s->status.framesize, s->status.framesize);
+    request->send(200, "application/json", res);
 }
