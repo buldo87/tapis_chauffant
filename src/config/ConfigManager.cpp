@@ -390,12 +390,12 @@ bool ConfigManager::loadSeasonalData(const String& profileName, int dayIndex, fl
     file.close();
     if (bytesRead != 24 * sizeof(int16_t)) return false;
     for (int i = 0; i < 24; i++) {
-        temperatures[i] = tempInt16[i] / 10.0f;
+        temperatures[i] = (float)tempInt16[i] / 10.0f;
     }
     return true;
 }
 
-bool ConfigManager::saveSeasonalData(const String& profileName, int dayIndex, const float* temperatures) {
+bool ConfigManager::saveSeasonalData(const String& profileName, int dayIndex, const int16_t* temperatures) {
     const String tempPath = "/profiles/" + profileName + "/temperature.bin";
     File file = LittleFS.open(tempPath, "r+");
     if (!file) return false;
@@ -404,11 +404,7 @@ bool ConfigManager::saveSeasonalData(const String& profileName, int dayIndex, co
         file.close();
         return false;
     }
-    int16_t tempInt16[24];
-    for (int i = 0; i < 24; i++) {
-        tempInt16[i] = (int16_t)(temperatures[i] * 10);
-    }
-    size_t bytesWritten = file.write((uint8_t*)tempInt16, 24 * sizeof(int16_t));
+    size_t bytesWritten = file.write((uint8_t*)temperatures, 24 * sizeof(int16_t));
     file.close();
     return (bytesWritten == 24 * sizeof(int16_t));
 }
@@ -418,13 +414,9 @@ bool ConfigManager::createDefaultSeasonalData(const String& profileName) {
     const String tempPath = "/profiles/" + profileName + "/temperature.bin";
     File tempFile = LittleFS.open(tempPath, "w");
     if (!tempFile) return false;
-    float dayTemps[24];
     int16_t dayTempsInt16[24];
     for (int day = 0; day < 366; day++) {
-        generateDefaultDayTemperatures(day, dayTemps);
-        for (int hour = 0; hour < 24; hour++) {
-            dayTempsInt16[hour] = (int16_t)(dayTemps[hour] * 10);
-        }
+        generateDefaultDayTemperatures(day, dayTempsInt16); // Pass int16_t array
         tempFile.write((uint8_t*)dayTempsInt16, 24 * sizeof(int16_t));
     }
     tempFile.close();
@@ -441,13 +433,14 @@ bool ConfigManager::ensureProfileDirectory(const String& profileName) {
     return true;
 }
 
-void ConfigManager::generateDefaultDayTemperatures(int dayIndex, float* dayTemps) {
+void ConfigManager::generateDefaultDayTemperatures(int dayIndex, int16_t* dayTemps) {
     float seasonalBase = 22.0f + 6.0f * sin((dayIndex / 366.0f) * 2.0f * PI - PI/2);
     for (int hour = 0; hour < 24; hour++) {
         float baseTemp = 22.2f + (hour >= 8 && hour <= 20 ? 3.0f : 0.0f);
         float seasonalVariation = seasonalBase - 22.0f;
-        dayTemps[hour] = baseTemp + seasonalVariation;
-        if (dayTemps[hour] < 15.0f) dayTemps[hour] = 15.0f;
-        if (dayTemps[hour] > 35.0f) dayTemps[hour] = 35.0f;
+        float tempFloat = baseTemp + seasonalVariation;
+        if (tempFloat < 15.0f) tempFloat = 15.0f;
+        if (tempFloat > 35.0f) tempFloat = 35.0f;
+        dayTemps[hour] = (int16_t)(tempFloat * 10);
     }
 }

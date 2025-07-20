@@ -96,9 +96,9 @@ struct SystemConfig {
         globalMaxTempSet = (int16_t)(temp * 10); 
     }
     
-    inline float getTempCurve(int hour) const {
-        if (hour < 0 || hour >= TEMP_CURVE_POINTS) return 22.0f;
-        return tempCurve[hour] / 10.0f;
+    inline int16_t getTempCurve(int hour) const {
+        if (hour < 0 || hour >= TEMP_CURVE_POINTS) return 220; // Default to 22.0C * 10
+        return tempCurve[hour];
     }
     inline void setTempCurve(int hour, float temp) {
         if (hour >= 0 && hour < TEMP_CURVE_POINTS) {

@@ -111,7 +111,7 @@ public:
      * @param temperatures Pointeur vers un tableau de 24 flottants contenant les températures à sauvegarder.
      * @return true si la sauvegarde a réussi, false sinon.
      */
-    static bool saveSeasonalData(const String& profileName, int dayIndex, const float* temperatures);
+    static bool saveSeasonalData(const String& profileName, int dayIndex, const int16_t* temperatures);
 
     /**
      * @brief Crée un fichier de données saisonnières par défaut pour un profil.
@@ -128,7 +128,7 @@ private:
     
     static uint32_t calculateConfigHash(const SystemConfig& config);
     static bool ensureProfileDirectory(const String& profileName);
-    static void generateDefaultDayTemperatures(int dayIndex, float* dayTemps);
+    static void generateDefaultDayTemperatures(int dayIndex, int16_t* dayTemps);
 };
 
 #endif

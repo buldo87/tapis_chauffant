@@ -19,7 +19,7 @@ export async function parseBinData(arrayBuffer) {
         for (let hour = 0; hour < 24; hour++) {
             const byteOffset = (day * 24 + hour) * 2;
             // Les données sont stockées en little-endian sur l'ESP32
-            const temp = view.getInt16(byteOffset, true) / 10.0;
+            const temp = view.getInt16(byteOffset, true);
             dayData.push(temp);
         }
         yearlyData.push(dayData);

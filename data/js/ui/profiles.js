@@ -62,6 +62,11 @@ async function loadProfile(name) {
     try {
         // 1. Charger les données de configuration générale du profil (JSON)
         const profileConfig = await api.loadProfile(name);
+        // Divide temperature values by 10 for frontend use
+        profileConfig.setpoint /= 10.0;
+        profileConfig.globalMinTempSet /= 10.0;
+        profileConfig.globalMaxTempSet /= 10.0;
+        profileConfig.tempCurve = profileConfig.tempCurve.map(t => t / 10.0);
         setConfig(profileConfig);
 
         // 2. Charger les données de température annuelles (.bin) pour ce profil
@@ -70,7 +75,7 @@ async function loadProfile(name) {
         const yearlyDataBuffer = await api.getYearlyTemperatures();
         
         // 3. Parser les données .bin et mettre à jour la heatmap
-        const yearlyData = await parseBinData(yearlyDataBuffer); // Assurez-vous que parseBinData est accessible
+        const yearlyData = (await parseBinData(yearlyDataBuffer)).map(day => day.map(t => t / 10.0)); // Divide by 10 here
         updateHeatmap(yearlyData);
 
         // Mettre à jour la courbe de température du jour actuel dans la configuration

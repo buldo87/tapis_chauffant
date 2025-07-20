@@ -15,8 +15,8 @@ function gatherConfigFromUI() {
     newConfig.Kd = parseFloat(document.getElementById('KdSet').value);
 
     newConfig.useLimitTemp = document.getElementById('useLimitTemp').checked;
-    newConfig.globalMinTempSet = parseFloat(document.getElementById('minTempSet').value);
-    newConfig.globalMaxTempSet = parseFloat(document.getElementById('maxTempSet').value);
+    newConfig.globalMinTempSet = parseFloat(document.getElementById('minTempSet').value) * 10;
+    newConfig.globalMaxTempSet = parseFloat(document.getElementById('maxTempSet').value) * 10;
 
     newConfig.cameraEnabled = document.getElementById('showCamera').checked;
     newConfig.cameraResolution = document.getElementById('cameraResolution').value;
@@ -43,9 +43,9 @@ function initChart() {
     const ctx = canvas.getContext('2d');
 
     const extendedTemperatureData = [
-        state.config.tempCurve[state.config.tempCurve.length - 1],
-        ...state.config.tempCurve,
-        state.config.tempCurve[0]
+        state.config.tempCurve[state.config.tempCurve.length - 1] / 10.0,
+        ...state.config.tempCurve.map(t => t / 10.0),
+        state.config.tempCurve[0] / 10.0
     ];
 
     const labels = ['23h', '0h', '1h', '2h', '3h', '4h', '5h', '6h', '7h', '8h', '9h', '10h', '11h',
@@ -80,8 +80,8 @@ function initChart() {
             },
             scales: { 
                 y: { 
-                    min: state.config.globalMinTempSet,
-                    max: state.config.globalMaxTempSet 
+                    min: state.config.globalMinTempSet / 10.0,
+                    max: state.config.globalMaxTempSet / 10.0 
                 }
             }
         }
@@ -115,11 +115,15 @@ function initChart() {
 
 function updateTemperature(hour, temp) {
     if (hour >= 1 && hour <= 24) {
-        const newTemp = Math.max(state.config.globalMinTempSet, Math.min(state.config.globalMaxTempSet, temp));
-        state.config.tempCurve[hour - 1] = newTemp;
-        chart.data.datasets[0].data[hour] = newTemp;
-        if (hour === 1) chart.data.datasets[0].data[25] = newTemp;
-        if (hour === 24) chart.data.datasets[0].data[0] = newTemp;
+        // Convert temp (float) to int16_t * 10 for storage
+        const newTempInt = Math.round(Math.max(state.config.globalMinTempSet / 10.0, Math.min(state.config.globalMaxTempSet / 10.0, temp)) * 10);
+        state.config.tempCurve[hour - 1] = newTempInt;
+        
+        // Convert back to float for chart display
+        const newTempFloat = newTempInt / 10.0;
+        chart.data.datasets[0].data[hour] = newTempFloat;
+        if (hour === 1) chart.data.datasets[0].data[25] = newTempFloat;
+        if (hour === 24) chart.data.datasets[0].data[0] = newTempFloat;
         chart.update('none');
     }
 }
@@ -180,9 +184,9 @@ export function updateTempChart(tempData) {
     if (!chart) return;
     state.config.tempCurve = tempData;
     const extendedTemperatureData = [
-        tempData[tempData.length - 1],
-        ...tempData,
-        tempData[0]
+        tempData[tempData.length - 1] / 10.0,
+        ...tempData.map(t => t / 10.0),
+        tempData[0] / 10.0
     ];
     chart.data.datasets[0].data = extendedTemperatureData;
     chart.update();

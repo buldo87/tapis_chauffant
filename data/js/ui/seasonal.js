@@ -58,12 +58,39 @@ function getDayInfo(dayIndex) {
 Moy: ${avgTemp.toFixed(1)}°C\nMin: ${minTemp.toFixed(1)}°C\nMax: ${maxTemp.toFixed(1)}°C` };
 }
 
+function calculateYearlyStats(yearlyData) {
+    let allTemps = [];
+    yearlyData.forEach(dayData => {
+        allTemps = allTemps.concat(dayData);
+    });
+
+    if (allTemps.length === 0) {
+        return { min: '--', max: '--', avg: '--' };
+    }
+
+    const min = Math.min(...allTemps);
+    const max = Math.max(...allTemps);
+    const sum = allTemps.reduce((a, b) => a + b, 0);
+    const avg = sum / allTemps.length;
+
+    return { min: min.toFixed(1), max: max.toFixed(1), avg: avg.toFixed(1) };
+}
+
 function renderHeatmap(yearlyData) {
     if (!heatmapCanvas) return;
     if (!yearlyData || yearlyData.length === 0) {
         heatmapCanvas.innerHTML = '<p class="text-gray-500">Aucune donnée annuelle disponible.</p>';
+        document.getElementById('minYearlyTemp').textContent = '--°C';
+        document.getElementById('maxYearlyTemp').textContent = '--°C';
+        document.getElementById('avgYearlyTemp').textContent = '--°C';
         return;
     }
+
+    const stats = calculateYearlyStats(yearlyData);
+    document.getElementById('minYearlyTemp').textContent = `${stats.min}°C`;
+    document.getElementById('maxYearlyTemp').textContent = `${stats.max}°C`;
+    document.getElementById('avgYearlyTemp').textContent = `${stats.avg}°C`;
+
     let html = '';
     const daysInMonth = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     const dayOfWeekLabels = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
@@ -77,7 +104,6 @@ function renderHeatmap(yearlyData) {
     let currentYear = new Date().getFullYear();
     for (let month = 0; month < 12; month++) {
         html += `<div class="month-column">`;
-        html += `<div class="month-name">${getMonthName(month)}</div>`;
         html += `<div class="month-grid">`;
         const firstDayOfMonth = new Date(currentYear, month, 1).getDay();
         const startOffset = (firstDayOfMonth === 0) ? 6 : firstDayOfMonth - 1;
@@ -129,7 +155,7 @@ function selectDay(index) {
 
 async function saveSelectedDay() {
     if (selectedDayIndex === -1) return;
-    const tempCurve = getTempCurve();
+    const tempCurve = getTempCurve(); // This returns values * 10
     try {
         await api.saveDayData(selectedDayIndex, tempCurve);
         alert(`Données du jour ${selectedDayIndex + 1} sauvegardées.`);
@@ -143,11 +169,12 @@ async function saveSelectedDay() {
 
 async function applyCurveToYear() {
     if (!confirm("Êtes-vous sûr de vouloir appliquer la courbe actuelle à TOUS les jours de l'année ? Cette action est irréversible.")) return;
-    const tempCurve = getTempCurve();
+    const tempCurve = getTempCurve(); // This returns values * 10
     try {
-        await api.applyYearlyCurve(tempCurve); // Nouvelle route API
+        await api.applyYearlyCurve(tempCurve);
         alert("La courbe a été appliquée à toute l'année.");
-        const yearlyData = await api.getYearlyTemperatures();
+        const yearlyDataBuffer = await api.getYearlyTemperatures();
+        const yearlyData = (await parseBinData(yearlyDataBuffer)).map(day => day.map(t => t / 10.0)); // Divide by 10 here
         state.seasonalData = yearlyData;
         renderHeatmap(yearlyData);
     } catch (error) {
@@ -161,18 +188,22 @@ import { parseBinData } from '../utils.js';
 const smoothDayBtn = document.getElementById('smoothDayBtn');
 
 function smoothCurrentDayCurve() {
-    const currentCurve = getTempCurve();
+    const currentCurve = getTempCurve(); // This returns values * 10
     if (!currentCurve || currentCurve.length === 0) return;
 
-    const smoothedCurve = [...currentCurve]; // Copie pour ne pas modifier l'original directement
+    // Convert to float for calculation
+    const currentCurveFloat = currentCurve.map(t => t / 10.0);
+    const smoothedCurveFloat = [...currentCurveFloat];
 
-    for (let i = 0; i < smoothedCurve.length; i++) {
-        const prev = smoothedCurve[(i - 1 + smoothedCurve.length) % smoothedCurve.length];
-        const next = smoothedCurve[(i + 1) % smoothedCurve.length];
-        smoothedCurve[i] = (prev + currentCurve[i] + next) / 3;
+    for (let i = 0; i < smoothedCurveFloat.length; i++) {
+        const prev = smoothedCurveFloat[(i - 1 + smoothedCurveFloat.length) % smoothedCurveFloat.length];
+        const next = smoothedCurveFloat[(i + 1) % smoothedCurveFloat.length];
+        smoothedCurveFloat[i] = (prev + currentCurveFloat[i] + next) / 3;
     }
 
-    updateTempChart(smoothedCurve);
+    // Convert back to int16_t * 10 for updateTempChart
+    const smoothedCurveInt = smoothedCurveFloat.map(t => Math.round(t * 10));
+    updateTempChart(smoothedCurveInt);
 }
 
 export async function initSeasonal() {
@@ -183,7 +214,7 @@ export async function initSeasonal() {
     if (heatmapLoadingSpinner) heatmapLoadingSpinner.style.display = 'flex';
     try {
         const arrayBuffer = await api.getYearlyTemperatures();
-        const yearlyData = await parseBinData(arrayBuffer);
+        const yearlyData = (await parseBinData(arrayBuffer)).map(day => day.map(t => t / 10.0));
         state.seasonalData = yearlyData;
         renderHeatmap(yearlyData);
         selectDay(0); // Sélectionner le premier jour par défaut

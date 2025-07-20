@@ -6,6 +6,7 @@
 #include "../utils/Logger.h"
 #include "../hardware/CameraManager.h" // Ajout de l'en-tête
 #include <ArduinoJson.h>
+#include <WiFi.h>
 #include <LittleFS.h>
 
 // Forward declarations for functions in main.cpp
@@ -109,12 +110,12 @@ void AppWebServerManager::handleGetCurrentConfig(AsyncWebServerRequest *request)
     doc["Kp"] = config.Kp;
     doc["Ki"] = config.Ki;
     doc["Kd"] = config.Kd;
-    doc["setpoint"] = (float)config.setpoint / 10.0f;
-    doc["globalMinTempSet"] = (float)config.globalMinTempSet / 10.0f;
-    doc["globalMaxTempSet"] = (float)config.globalMaxTempSet / 10.0f;
+    doc["setpoint"] = config.setpoint;
+    doc["globalMinTempSet"] = config.globalMinTempSet;
+    doc["globalMaxTempSet"] = config.globalMaxTempSet;
     JsonArray tempCurve = doc.createNestedArray("tempCurve");
     for(int i=0; i<TEMP_CURVE_POINTS; i++) {
-        tempCurve.add((float)config.tempCurve[i] / 10.0f);
+        tempCurve.add(config.tempCurve[i]);
     }
     doc["latitude"] = config.latitude;
     doc["longitude"] = config.longitude;
@@ -161,13 +162,13 @@ void AppWebServerManager::handleApplyAllSettings(AsyncWebServerRequest *request,
     if (doc.containsKey("latitude")) config.latitude = doc["latitude"];
     if (doc.containsKey("longitude")) config.longitude = doc["longitude"];
     if (doc.containsKey("DST_offset")) config.DST_offset = doc["DST_offset"];
-    if (doc.containsKey("setpoint")) config.setSetpointValue(doc["setpoint"]);
-    if (doc.containsKey("globalMinTempSet")) config.setMinTemp(doc["globalMinTempSet"]);
-    if (doc.containsKey("globalMaxTempSet")) config.setMaxTemp(doc["globalMaxTempSet"]);
+    if (doc.containsKey("setpoint")) config.setSetpointValue((int16_t)(doc["setpoint"].as<float>() * 10));
+    if (doc.containsKey("globalMinTempSet")) config.setMinTemp((int16_t)(doc["globalMinTempSet"].as<float>() * 10));
+    if (doc.containsKey("globalMaxTempSet")) config.setMaxTemp((int16_t)(doc["globalMaxTempSet"].as<float>() * 10));
     if (doc.containsKey("tempCurve") && doc["tempCurve"].is<JsonArray>()) {
         JsonArray curve = doc["tempCurve"].as<JsonArray>();
         for (int i = 0; i < TEMP_CURVE_POINTS && i < curve.size(); i++) {
-            config.setTempCurve(i, curve[i]);
+            config.setTempCurve(i, (int16_t)(curve[i].as<float>() * 10));
         }
     }
     if (doc.containsKey("ledState")) config.ledState = doc["ledState"];
@@ -221,9 +222,9 @@ void AppWebServerManager::handleLoadProfile(AsyncWebServerRequest *request) {
             doc["Kp"] = tempConfig.Kp;
             doc["Ki"] = tempConfig.Ki;
             doc["Kd"] = tempConfig.Kd;
-            doc["setpoint"] = tempConfig.getSetpointFloat();
-            doc["globalMinTempSet"] = tempConfig.getMinTempFloat();
-            doc["globalMaxTempSet"] = tempConfig.getMaxTempFloat();
+            doc["setpoint"] = tempConfig.setpoint;
+            doc["globalMinTempSet"] = tempConfig.globalMinTempSet;
+            doc["globalMaxTempSet"] = tempConfig.globalMaxTempSet;
             JsonArray tempCurve = doc.createNestedArray("tempCurve");
             for(int i=0; i<TEMP_CURVE_POINTS; i++) {
                 tempCurve.add(tempConfig.getTempCurve(i));
@@ -304,7 +305,7 @@ void AppWebServerManager::handleGetDayData(AsyncWebServerRequest *request) {
         DynamicJsonDocument doc(1024);
         JsonArray arr = doc.to<JsonArray>();
         for(int i=0; i<24; i++) {
-            arr.add(temps[i]);
+            arr.add((int16_t)(temps[i] * 10)); // Convert to int16_t * 10
         }
         String response;
         serializeJson(doc, response);
@@ -324,10 +325,15 @@ void AppWebServerManager::handleSaveDayData(AsyncWebServerRequest *request, uint
     JsonArray tempArray = doc["temps"];
     float temps[24];
     for(int i=0; i<24; i++) {
-        temps[i] = tempArray[i];
+        temps[i] = tempArray[i].as<float>();
     }
     SystemConfig& config = getGlobalConfig();
-    if (ConfigManager::saveSeasonalData(config.currentProfileName, dayIndex, temps)) {
+    // Convertir les floats en int16_t * 10 avant de sauvegarder
+    int16_t tempsInt[24];
+    for(int i=0; i<24; i++) {
+        tempsInt[i] = (int16_t)(temps[i] * 10);
+    }
+    if (ConfigManager::saveSeasonalData(config.currentProfileName, dayIndex, tempsInt)) {
         request->send(200, "text/plain", "Données sauvegardées");
     } else {
         request->send(500, "text/plain", "Erreur sauvegarde");
@@ -371,15 +377,21 @@ void AppWebServerManager::handleApplyYearlyCurve(AsyncWebServerRequest *request,
         return;
     }
 
-    float tempCurve[24];
+    float tempCurveFloat[24];
     for (int i = 0; i < 24; i++) {
-        tempCurve[i] = tempCurveJson[i].as<float>();
+        tempCurveFloat[i] = tempCurveJson[i].as<float>();
     }
 
     SystemConfig& config = getGlobalConfig();
     bool success = true;
+    // Convertir les floats en int16_t * 10 avant de sauvegarder
+    int16_t tempCurveInt[24];
+    for (int i = 0; i < 24; i++) {
+        tempCurveInt[i] = (int16_t)(tempCurveFloat[i] * 10);
+    }
+
     for (int day = 0; day < 366; day++) {
-        if (!ConfigManager::saveSeasonalData(config.currentProfileName, day, tempCurve)) {
+        if (!ConfigManager::saveSeasonalData(config.currentProfileName, day, tempCurveInt)) {
             success = false;
             LOG_ERROR("WEBSERVER", "Failed to save seasonal data for day %d", day);
             break;
@@ -395,13 +407,42 @@ void AppWebServerManager::handleApplyYearlyCurve(AsyncWebServerRequest *request,
 
 void AppWebServerManager::handleStatus(AsyncWebServerRequest *request) {
     SystemConfig& config = getGlobalConfig();
-    DynamicJsonDocument doc(1024);
-    doc["temperature"] = (float)SensorManager::getCurrentTemperature() / 10.0f;
+    DynamicJsonDocument doc(1024); // Increased size to accommodate more fields
+
+    // Temperature and Humidity
+    doc["temperature"] = SensorManager::getCurrentTemperature();
     doc["humidity"] = SensorManager::getCurrentHumidity();
-    doc["target"] = (float)getCurrentTargetTemperature() / 10.0f;
-    doc["heater_output"] = getHeaterOutput();
+
+    // Heater State and Mode
+    doc["heaterState"] = getHeaterOutput() > 0 ? "ON" : "OFF"; // Derived from heater_output
+    doc["currentMode"] = config.usePWM ? "PID" : "Hysteresis"; // Derived from config.usePWM
+    doc["consigneTemp"] = getCurrentTargetTemperature(); // Renamed from "target"
+
+    // PID/Hysteresis parameters (for modeDetails)
+    doc["Kp"] = config.Kp;
+    doc["Ki"] = config.Ki;
+    doc["Kd"] = config.Kd;
+    doc["hysteresis"] = config.hysteresis;
+
+    // LED State
+    doc["ledState"] = config.ledState;
+    doc["ledRed"] = config.ledRed;
+    doc["ledGreen"] = config.ledGreen;
+    doc["ledBlue"] = config.ledBlue;
+
+    // System Status (WiFi, Time)
+    doc["wifiConnected"] = WiFi.isConnected(); // Add WiFi status
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+        doc["currentTime"] = mktime(&timeinfo); // Unix timestamp
+    } else {
+        doc["currentTime"] = 0; // Default to 0 if time not available
+    }
+
+    // Other existing fields
     doc["safety_level"] = SafetySystem::getCurrentLevel();
-    doc["safety_message"] = "";
+    doc["safety_message"] = ""; // Still empty, as before
+
     String response;
     serializeJson(doc, response);
     request->send(200, "application/json", response);
@@ -422,7 +463,7 @@ void AppWebServerManager::handleHistory(AsyncWebServerRequest *request) {
 
         JsonObject record = arr.createNestedObject();
         record["time"] = history[index].timestamp;
-        record["temp"] = history[index].temperature / 10.0f;
+        record["temp"] = history[index].temperature;
         record["hum"] = history[index].humidity;
     }
     String response;

@@ -51,7 +51,25 @@ export const state = {
 
 // Fonctions pour mettre à jour l'état de manière contrôlée
 export function updateStatus(newStatus) {
+    // Update current status properties
     Object.assign(state.status, newStatus);
+
+    // Update history for charts and stats
+    const MAX_HISTORY_LENGTH = 100; // Same as chart limit
+
+    if (newStatus.temperature !== undefined) {
+        state.charts.tempHistory.push(newStatus.temperature / 10.0);
+        if (state.charts.tempHistory.length > MAX_HISTORY_LENGTH) {
+            state.charts.tempHistory.shift();
+        }
+    }
+
+    if (newStatus.humidity !== undefined) {
+        state.charts.humidityHistory.push(newStatus.humidity / 10.0);
+        if (state.charts.humidityHistory.length > MAX_HISTORY_LENGTH) {
+            state.charts.humidityHistory.shift();
+        }
+    }
 }
 
 export function setConfig(newConfig) {
