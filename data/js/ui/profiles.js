@@ -63,7 +63,6 @@ async function loadProfile(name) {
         // 1. Charger les données de configuration générale du profil (JSON)
         const profileConfig = await api.loadProfile(name);
         setConfig(profileConfig);
-        updateTempChart(profileConfig.tempCurve);
 
         // 2. Charger les données de température annuelles (.bin) pour ce profil
         // L'API utilise le profil courant stocké sur l'ESP, donc il faut l'activer d'abord
@@ -73,6 +72,13 @@ async function loadProfile(name) {
         // 3. Parser les données .bin et mettre à jour la heatmap
         const yearlyData = await parseBinData(yearlyDataBuffer); // Assurez-vous que parseBinData est accessible
         updateHeatmap(yearlyData);
+
+        // Mettre à jour la courbe de température du jour actuel dans la configuration
+        // Pour l'instant, on prend le premier jour du profil chargé
+        if (yearlyData && yearlyData.length > 0) {
+            state.config.tempCurve = yearlyData[0];
+            updateTempChart(state.config.tempCurve);
+        }
 
         alert(`Profil '${name}' chargé et activé.`);
         document.getElementById('activeProfileName').textContent = name;

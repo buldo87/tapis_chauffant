@@ -124,6 +124,13 @@ function updateTemperature(hour, temp) {
     }
 }
 
+function updateChartScales() {
+    if (!chart) return;
+    chart.options.scales.y.min = parseFloat(document.getElementById('minTempSet').value);
+    chart.options.scales.y.max = parseFloat(document.getElementById('maxTempSet').value);
+    chart.update();
+}
+
 function updateVisibility() {
     document.getElementById("pwmSettings").style.display = document.getElementById("usePWM").checked ? "block" : "none";
     document.getElementById("hysteresisSettings").style.display = document.getElementById("usePWM").checked ? "none" : "block";
@@ -131,6 +138,8 @@ function updateVisibility() {
 
     const weatherModeChecked = document.getElementById("weatherMode").checked;
     document.getElementById("weatherSettings").style.display = weatherModeChecked ? "block" : "none";
+
+    updateChartScales(); // Update chart scales when visibility changes
 }
 
 export function getTempCurve() {
@@ -151,6 +160,9 @@ export function initConfiguration(config, onSave) {
     document.getElementById("usePWM").addEventListener('change', updateVisibility);
     document.getElementById("useLimitTemp").addEventListener('change', updateVisibility);
     document.getElementById("weatherMode").addEventListener('change', updateVisibility);
+
+    document.getElementById("minTempSet").addEventListener('change', updateChartScales);
+    document.getElementById("maxTempSet").addEventListener('change', updateChartScales);
 
     document.getElementById('applyBtn').addEventListener('click', async () => {
         const newConfig = gatherConfigFromUI();
