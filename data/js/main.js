@@ -13,6 +13,7 @@ import { initConfiguration } from './ui/configuration.js';
 import { initProfiles } from './ui/profiles.js';
 import { initSeasonal } from './ui/seasonal.js';
 import { initLedControls } from './ui/led.js';
+import { toggleMap } from './ui/map.js';
 
 // --- FONCTIONS DE MISE À JOUR ---
 
@@ -54,6 +55,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
         initSeasonal(state.config);
         initLedControls(state.config);
+
+        document.getElementById('mapToggleBtn').addEventListener('click', () => {
+            const mapContainer = document.getElementById('mapContainer');
+            const isVisible = mapContainer.style.display === 'block';
+            toggleMap(!isVisible);
+        });
 
         // 3. Démarrer les mises à jour périodiques
         setInterval(periodicUpdate, 2000); // Toutes les 2 secondes

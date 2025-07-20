@@ -31,61 +31,61 @@ export const api = {
      * Récupère l'état actuel des capteurs et du chauffage.
      * @returns {Promise<object>} L'objet de statut.
      */
-    getStatus: () => fetchJson('/status'),
+    getStatus: () => fetchJson('/api/status'),
 
     /**
      * Récupère la configuration complète du système.
      * @returns {Promise<object>} L'objet de configuration.
      */
-    getCurrentConfig: () => fetchJson('/getCurrentConfig'),
+    getCurrentConfig: () => fetchJson('/api/config'),
 
     /**
      * Applique et sauvegarde une nouvelle configuration.
      * @param {object} config - Le nouvel objet de configuration.
      * @returns {Promise<Response>} La réponse du serveur.
      */
-    applyAllSettings: (config) => postJson('/applyAllSettings', config),
+    applyAllSettings: (config) => postJson('/api/config', config),
 
     /**
      * Récupère la liste des profils de configuration disponibles.
      * @returns {Promise<Array<object>>} La liste des profils.
      */
-    listProfiles: () => fetchJson('/listProfiles').then(data => data.profiles),
+    listProfiles: () => fetchJson('/api/profiles'),
 
     /**
      * Charge un profil de configuration par son nom.
      * @param {string} name - Le nom du profil.
      * @returns {Promise<object>} Les données du profil.
      */
-    loadProfile: (name) => fetchJson(`/loadProfile?name=${encodeURIComponent(name)}`),
+    loadProfile: (name) => fetchJson(`/api/profiles/load?name=${encodeURIComponent(name)}`),
 
     /**
      * Sauvegarde un profil de configuration.
      * @param {object} profileData - Les données du profil à sauvegarder.
      * @returns {Promise<Response>} La réponse du serveur.
      */
-    saveProfile: (profileData) => postJson('/saveProfile', profileData),
+    saveProfile: (profileData) => postJson('/api/profiles/save', profileData),
 
     /**
      * Supprime un profil par son nom.
      * @param {string} name - Le nom du profil.
      * @returns {Promise<Response>} La réponse du serveur.
      */
-    deleteProfile: (name) => fetch(`/deleteProfile?name=${encodeURIComponent(name)}`, { method: 'DELETE' }),
+    deleteProfile: (name) => postJson(`/api/profiles/delete`, { name }),
 
     /**
      * Active un profil par son nom.
      * @param {string} name - Le nom du profil.
      * @returns {Promise<Response>} La réponse du serveur.
      */
-    activateProfile: (name) => fetch(`/activateProfile?name=${encodeURIComponent(name)}`),
+    activateProfile: (name) => postJson(`/api/profiles/activate`, { name }),
 
     /**
      * Récupère les données de température pour un jour spécifique d'un profil saisonnier.
      * @param {number} dayIndex - L'index du jour (0-365).
      * @returns {Promise<object>} Les données de température du jour.
      */
-    getDayData: (dayIndex) => fetchJson(`/getDayData?day=${dayIndex}`),
+    getDayData: (dayIndex) => fetchJson(`/api/seasonal/day?day=${dayIndex}`),
 
     /**
      * Sauvegarde les données de température pour un jour spécifique.
@@ -93,17 +93,38 @@ export const api = {
      * @param {Array<number>} temperatures - Le tableau des 24 températures.
      * @returns {Promise<Response>} La réponse du serveur.
      */
-    saveDayData: (dayIndex, temperatures) => postJson('/saveDayData', { day: dayIndex, temperatures }),
+    saveDayData: (dayIndex, temperatures) => postJson('/api/seasonal/day', { day: dayIndex, temps: temperatures }),
 
     /**
      * Récupère les données de température annuelles pour la heatmap.
      * @returns {Promise<object>} Les données annuelles.
      */
-    getYearlyTemperatures: () => fetchJson('/getYearlyTemperatures'),
+    getYearlyTemperatures: () => fetch('/api/seasonal/yearly').then(res => res.arrayBuffer()),
 
     /**
      * Récupère les informations sur le stream MJPEG.
      * @returns {Promise<object>} Les informations du stream.
      */
-    getMjpegInfo: () => fetchJson('/mjpeg-info')
+    getMjpegInfo: () => fetchJson('/mjpeg/info'),
+
+    /**
+     * Applique la courbe de température actuelle à toute l'année.
+     * @param {Array<number>} tempCurve - La courbe de température à appliquer.
+     * @returns {Promise<Response>} La réponse du serveur.
+     */
+    applyYearlyCurve: (tempCurve) => postJson('/api/applyYearlyCurve', { tempCurve }),
+
+    /**
+     * Lisse les courbes de température pour un mois donné.
+     * @param {number} monthIndex - L'index du mois (0-11).
+     * @returns {Promise<Response>} La réponse du serveur.
+     */
+    smoothMonthData: (monthIndex) => postJson('/smoothMonthData', { month: monthIndex }),
+
+    /**
+     * Sauvegarde l'intégralité des données de température annuelles.
+     * @param {Array<Array<number>>} yearlyData - Le tableau 2D des températures annuelles (jour x heure).
+     * @returns {Promise<Response>} La réponse du serveur.
+     */
+    saveYearlyTemperatures: (yearlyData) => postJson('/saveYearlyTemperatures', { yearlyData: yearlyData })
 };

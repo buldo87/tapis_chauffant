@@ -9,10 +9,6 @@ import { state } from '../state.js';
 const elements = {
     temperature: document.getElementById('temperature'),
     humidity: document.getElementById('humidity'),
-    heaterState: document.getElementById('heaterState'),
-    currentMode: document.getElementById('currentMode'),
-    consigneTemp: document.getElementById('consigneTemp'),
-    currentTime: document.getElementById('currentTime'),
     tempChartCanvas: document.getElementById('tempChart'),
     humidityChartCanvas: document.getElementById('humidityChart')
 };
@@ -51,19 +47,12 @@ function createChart(canvas, label, color) {
 export function initSurveillance() {
     tempChart = createChart(elements.tempChartCanvas, 'Température', '#ff6b6b');
     humidityChart = createChart(elements.humidityChartCanvas, 'Humidité', '#4dabf7');
-    setInterval(() => {
-        const now = new Date();
-        elements.currentTime.textContent = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-    }, 1000);
 }
 
 export function updateSurveillance(status) {
     // Mise à jour des cartes
     elements.temperature.textContent = `${status.temperature.toFixed(1)}°C`;
     elements.humidity.textContent = `${status.humidity.toFixed(1)}%`;
-    elements.heaterState.textContent = `${status.heaterState}%`;
-    elements.currentMode.textContent = status.currentMode;
-    elements.consigneTemp.textContent = `${status.setpoint.toFixed(1)}°C`;
 
     // Mise à jour des graphiques
     const timeLabel = new Date().toLocaleTimeString();

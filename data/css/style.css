@@ -257,7 +257,11 @@
             border-radius: 28px;
         }
         
-        .slider:before {
+        input:checked + .slider {
+            background-color: var(--ant-orange);
+        }
+        
+        input:checked + .slider:before {
             position: absolute;
             content: "";
             height: 20px;
@@ -267,10 +271,6 @@
             background-color: white;
             transition: 0.4s;
             border-radius: 50%;
-        }
-        
-        input:checked + .slider {
-            background-color: var(--ant-orange);
         }
         
         input:checked + .slider:before {
@@ -436,4 +436,113 @@
   color: #60a5fa; /* hover blue */
 }
 
+/* Yearly Heatmap Styles */
+.yearly-calendar-wrapper {
+    display: flex;
+    border: 1px solid #333;
+    border-radius: 8px;
+    overflow-x: auto; /* Permet le défilement horizontal si nécessaire */
+    background-color: #222;
+    padding: 5px;
+}
 
+.day-of-week-column {
+    display: flex;
+    flex-direction: column;
+    margin-right: 5px; /* Espace entre les jours de la semaine et les mois */
+}
+
+.empty-cell-for-month-header {
+    height: 21px; /* Hauteur pour aligner avec le nom du mois */
+    width: 14px; /* Largeur pour aligner avec les cellules de jour */
+}
+
+.day-of-week-header {
+    height: 14px; /* Hauteur de chaque cellule de jour */
+    width: 14px; /* Largeur de chaque cellule de jour */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.6em;
+    font-weight: bold;
+    color: #ccc;
+    background-color: #333;
+    margin-bottom: 1px; /* Espace entre les jours */
+    margin-top: 2px; /* Légère marge pour descendre */
+}
+
+.months-container {
+    display: flex;
+    gap: 10px; /* Espace entre chaque mois */
+}
+
+.month-column {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #444; /* Encadré pour chaque mois */
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+.month-name {
+    background-color: #333;
+    color: #fff;
+    padding: 4px 0;
+    text-align: center;
+    font-weight: bold;
+    font-size: 0.8em;
+    margin-bottom: 1px; /* Espace entre le nom du mois et la grille */
+}
+
+.month-grid {
+    display: grid;
+    grid-template-rows: repeat(7, 14px); /* 7 jours par semaine, 14px de haut */
+    grid-auto-flow: column; /* Les éléments se placent en colonnes d'abord */
+    gap: 1px;
+    background-color: #222; /* Fond pour les espaces entre les cellules */
+}
+
+.heatmap-cell {
+    width: 14px;
+    height: 14px;
+    position: relative;
+    background-color: #555;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.5em;
+    font-weight: bold;
+    color: #eee;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    border: 1px solid #444; /* Bordure pour les cellules individuelles */
+    box-sizing: border-box; /* Inclure padding et border dans la taille totale */
+}
+
+.heatmap-cell:hover {
+    border: 1px solid #fff; /* Bordure blanche au survol */
+    z-index: 1; /* Mettre au premier plan au survol */
+}
+
+.heatmap-cell.empty-cell {
+    background-color: #1a1a1a !important; /* Plus sombre pour les cellules vides */
+    cursor: default;
+}
+
+.heatmap-cell.selected-day {
+    border: 2px solid #fff; /* Bordure blanche pour le jour sélectionné */
+    box-shadow: 0 0 5px #fff; /* Effet de lueur */
+}
+
+.loading-spinner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 150px; /* Ajuster si nécessaire */
+    color: #4ecdc4; /* Une belle couleur de chargement */
+}
+
+.loading-spinner i {
+    margin-bottom: 10px;
+}

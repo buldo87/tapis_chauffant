@@ -64,7 +64,6 @@ struct SystemConfig {
     uint32_t configVersion = 2;
     uint32_t configHash = 0;
     char lastSaveTime[20] = "never";
-    bool seasonalModeEnabled = false;
     uint8_t logLevel = 3; // LOG_LEVEL_INFO
     
     // === CONSTRUCTEUR ===
@@ -115,7 +114,7 @@ struct SystemConfig {
                 hysteresis > 0.0f && hysteresis < 10.0f);
     }
     
-private:
+public:
     void initDefaultTempCurve() {
         for (int i = 0; i < TEMP_CURVE_POINTS; i++) {
             float tempFloat = 22.2f + (i >= 8 && i <= 20 ? 3.0f : 0.0f);

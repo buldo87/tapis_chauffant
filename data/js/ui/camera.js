@@ -1,14 +1,13 @@
-/**
- * @file ui/camera.js
- * @description Gère l'affichage et les interactions avec le stream de la caméra.
- */
+
+import { api } from '../api.js';
 
 const elements = {
     container: document.getElementById('cameraContainer'),
     stream: document.getElementById('camStream'),
     error: document.getElementById('cameraError'),
     retryBtn: document.getElementById('retryCameraBtn'),
-    toggle: document.getElementById('showCamera')
+    toggle: document.getElementById('showCamera'),
+    resolutionSelect: document.getElementById('cameraResolution')
 };
 
 function updateVisibility(enabled) {
@@ -20,7 +19,6 @@ function startStream() {
     if (!elements.stream) return;
     console.log("📹 Démarrage du stream caméra...");
     elements.error.style.display = 'none';
-    // Ajout d'un timestamp pour éviter la mise en cache
     elements.stream.src = '/mjpeg?' + new Date().getTime();
 }
 
@@ -28,6 +26,15 @@ function stopStream() {
     if (!elements.stream) return;
     console.log("🛑 Arrêt du stream caméra.");
     elements.stream.src = '';
+}
+
+async function setCameraEnabled(enabled) {
+    try {
+        // This is a fire-and-forget call for now
+        fetch(`/setCamera?enabled=${enabled ? 1 : 0}`);
+    } catch (error) {
+        console.error("Failed to set camera state:", error);
+    }
 }
 
 export function initCamera(config) {
@@ -41,6 +48,7 @@ export function initCamera(config) {
 
     elements.toggle.addEventListener('change', (e) => {
         const enabled = e.target.checked;
+        setCameraEnabled(enabled);
         updateVisibility(enabled);
         if (enabled) {
             startStream();
@@ -61,4 +69,9 @@ export function initCamera(config) {
     };
 
     elements.retryBtn.addEventListener('click', startStream);
+
+    elements.resolutionSelect.addEventListener('change', (e) => {
+        const resolution = e.target.value;
+        fetch(`/set-resolution-cam?quality=${resolution}`);
+    });
 }

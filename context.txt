@@ -1,0 +1,48 @@
+Le code a été modifier car je pense qu'il est plus simple d'enlever le mode " normal" pour ne laisser que le "saisonnier" mais il reste encore des traces
+ce qui a été fait:
+
+   1. Modifier la Logique Côté ESP32 :
+       * Supprimer le champ seasonalModeEnabled de la configuration.
+       * Le code chargera toujours les données depuis temperature.bin.
+       * Ajouter une nouvelle commande API (par exemple, POST /api/applyYearly) qui prend une seule courbe et
+         l'écrit pour les 365 jours du fichier temperature.bin.
+
+   2. Modifier l'Interface Web :
+       * Supprimer l'interrupteur "Activer le Suivi Saisonnier".
+       * Supprimer toute la logique JS qui affiche/masque des éléments. Le calendrier, les outils, etc.,
+         seront toujours visibles.
+       * Ajouter un bouton "Appliquer à toute l'année" dans la section des outils (seasonalTools).
+       * L'écouteur de ce bouton appellera la nouvelle commande API.
+       * Le bouton "Sauvegarder Configuration" (applyBtn) ne s'occupera plus de la tempCurve.
+
+  mais j'ai maintenant des erreurs:
+  
+  XHRGET
+http://192.168.1.37/api/seasonal/yearly
+[HTTP/1.1 200 OK 319ms]
+
+1
+
+NQAyADEAMQ.....AnACAAFQALAAUABAACAAAA
+
+
+Il se contente de lire le .bin sans le déchiffrer ?
+XHRGET
+http://192.168.1.37/api/status
+  
+  Failed to load profile undefined: TypeError: can't access property "length", tempData is undefined
+    updateTempChart http://192.168.1.37/js/ui/configuration.js:166
+    loadProfile http://192.168.1.37/js/ui/profiles.js:64
+    initProfiles http://192.168.1.37/js/ui/profiles.js:108
+    initProfiles http://192.168.1.37/js/ui/profiles.js:105
+    <anonymous> http://192.168.1.37/js/main.js:51
+    async* http://192.168.1.37/js/main.js:32
+profiles.js:70:17
+    loadProfile http://192.168.1.37/js/ui/profiles.js:70
+    initProfiles http://192.168.1.37/js/ui/profiles.js:108
+    (Asynchrone : EventListener.handleEvent)
+    initProfiles http://192.168.1.37/js/ui/profiles.js:105
+    <anonyme> http://192.168.1.37/js/main.js:51
+    <anonyme> http://192.168.1.37/js/main.js:32
+	
+	la courbe annuelle est vide (pas normal) mais j'ai encore des données de température sur la chart de réglage ! c'est incohérant, il garde des données de l'ancienne version.

@@ -7,6 +7,11 @@ Preferences ConfigManager::prefs;
 unsigned long ConfigManager::lastSaveRequest = 0;
 bool ConfigManager::savePending = false;
 
+// Define a version for the preferences data structure
+// Increment this if the structure of SystemConfig changes significantly
+// to force a reset of saved preferences.
+const uint32_t PREFS_VERSION = 3; 
+
 bool ConfigManager::initialize() {
     if (!LittleFS.begin(true)) {
         LOG_ERROR("CONFIG", "LittleFS mount failed");
@@ -24,23 +29,68 @@ bool ConfigManager::initialize() {
 }
 
 bool ConfigManager::loadConfig(SystemConfig& config) {
-    prefs.begin("system", true);
-    size_t configSize = prefs.getBytesLength("config");
-    if (configSize == sizeof(config)) {
-        prefs.getBytes("config", &config, sizeof(config));
-        LOG_INFO("CONFIG", "Configuration restaurée depuis la mémoire flash");
-    } else {
-        LOG_WARN("CONFIG", "Aucune configuration trouvée, valeurs par défaut utilisées");
+    prefs.begin("system", true); // Read-only mode
+
+    uint32_t storedVersion = prefs.getUInt("prefsVersion", 0);
+
+    if (storedVersion != PREFS_VERSION) {
+        LOG_WARN("CONFIG", "Preferences version mismatch (Stored: %u, Expected: %u). Resetting to defaults.", storedVersion, PREFS_VERSION);
+        prefs.end();
+        prefs.begin("system", false); // Write mode to clear
+        prefs.clear(); // Clear old preferences
+        prefs.putUInt("prefsVersion", PREFS_VERSION); // Store current version
+        prefs.end();
+        config = SystemConfig(); // Reset config to defaults
+        LOG_INFO("CONFIG", "Preferences reset and default config applied.");
+        return true; // Successfully loaded (defaults)
     }
-    config.currentProfileName = prefs.getString("currentProfile", "default");
-    String lastSave = prefs.getString("lastSave", "jamais");
+
+    // Load individual members
+    config.usePWM = prefs.getBool("usePWM", config.usePWM);
+    config.weatherModeEnabled = prefs.getBool("weatherMode", config.weatherModeEnabled);
+    config.currentProfileName = prefs.getString("currentProfile", "default"); // Correctly load String
+    config.cameraEnabled = prefs.getBool("cameraEnabled", config.cameraEnabled);
+    config.cameraResolution = prefs.getString("cameraRes", config.cameraResolution); // Correctly load String
+    config.useTempCurve = prefs.getBool("useTempCurve", config.useTempCurve);
+    config.useLimitTemp = prefs.getBool("useLimitTemp", config.useLimitTemp);
+    config.logLevel = prefs.getUChar("logLevel", config.logLevel);
+
     prefs.end();
+
     if (!config.isValid()) {
-        LOG_WARN("CONFIG", "Configuration invalide détectée, reset aux valeurs par défaut");
-        config = SystemConfig();
+        LOG_WARN("CONFIG", "Configuration loaded is invalid. Resetting to defaults.");
+        config = SystemConfig(); // Reset to defaults if validation fails
+        // Re-save defaults to preferences
+        saveConfig(config); 
     }
+    
+    String lastSave = prefs.getString("lastSave", "jamais");
     LOG_INFO("CONFIG", "Dernière sauvegarde: %s", lastSave.c_str());
     LOG_INFO("CONFIG", "Profil actuel: %s", config.currentProfileName.c_str());
+
+    // Log file sizes for current profile
+    String generalPath = "/profiles/" + config.currentProfileName + "/general.json";
+    String tempPath = "/profiles/" + config.currentProfileName + "/temperature.bin";
+
+    if (LittleFS.exists(generalPath)) {
+        File generalFile = LittleFS.open(generalPath, "r");
+        if (generalFile) {
+            LOG_INFO("CONFIG", "  general.json size: %u bytes", generalFile.size());
+            generalFile.close();
+        }
+    } else {
+        LOG_WARN("CONFIG", "  general.json not found for current profile.");
+    }
+
+    if (LittleFS.exists(tempPath)) {
+        File tempFile = LittleFS.open(tempPath, "r");
+        if (tempFile) {
+            LOG_INFO("CONFIG", "  temperature.bin size: %u bytes", tempFile.size());
+            tempFile.close();
+        }
+    } else {
+        LOG_WARN("CONFIG", "  temperature.bin not found for current profile.");
+    }
     return true;
 }
 
@@ -49,33 +99,103 @@ bool ConfigManager::saveConfig(const SystemConfig& config) {
         LOG_ERROR("CONFIG", "Configuration invalide, sauvegarde annulée");
         return false;
     }
-    prefs.begin("system", false);
-    size_t written = prefs.putBytes("config", &config, sizeof(config));
-    if (written == sizeof(config)) {
-        struct tm timeinfo;
-        if (getLocalTime(&timeinfo)) {
-            char timeStr[20];
-            strftime(timeStr, sizeof(timeStr), "%d-%m-%Y %H:%M:%S", &timeinfo);
-            prefs.putString("lastSave", timeStr);
-        }
-        prefs.putString("currentProfile", config.currentProfileName);
-        LOG_INFO("CONFIG", "Configuration sauvegardée (%zu octets)", written);
-        prefs.end();
-        return true;
+    prefs.begin("system", false); // Write mode
+
+    prefs.putUInt("prefsVersion", PREFS_VERSION); // Always save current version
+
+    // Save individual members
+    prefs.putBool("usePWM", config.usePWM);
+    prefs.putBool("weatherMode", config.weatherModeEnabled);
+    prefs.putString("currentProfile", config.currentProfileName); // Correctly save String
+    prefs.putBool("cameraEnabled", config.cameraEnabled);
+    prefs.putString("cameraRes", config.cameraResolution); // Correctly save String
+    prefs.putBool("useTempCurve", config.useTempCurve);
+    prefs.putBool("useLimitTemp", config.useLimitTemp);
+    
+    prefs.putFloat("hysteresis", config.hysteresis);
+    prefs.putFloat("Kp", config.Kp);
+    prefs.putFloat("Ki", config.Ki);
+    prefs.putFloat("Kd", config.Kd);
+    
+    prefs.putShort("setpoint", config.setpoint);
+    prefs.putShort("minTemp", config.globalMinTempSet);
+    prefs.putShort("maxTemp", config.globalMaxTempSet);
+    
+    // Save tempCurve array
+    prefs.putBytes("tempCurve", config.tempCurve, sizeof(config.tempCurve));
+
+    prefs.putFloat("latitude", config.latitude);
+    prefs.putFloat("longitude", config.longitude);
+    prefs.putInt("DST_offset", config.DST_offset);
+    
+    prefs.putBool("ledState", config.ledState);
+    prefs.putUChar("ledBright", config.ledBrightness);
+    prefs.putUChar("ledRed", config.ledRed);
+    prefs.putUChar("ledGreen", config.ledGreen);
+    prefs.putUChar("ledBlue", config.ledBlue);
+    
+    prefs.putUInt("configVersion", config.configVersion);
+    // Hash is calculated and stored in config object, then saved
+    prefs.putUInt("configHash", config.configHash); 
+    
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+        char timeStr[20];
+        strftime(timeStr, sizeof(timeStr), "%d-%m-%Y %H:%M:%S", &timeinfo);
+        prefs.putString("lastSave", timeStr); // Correctly save String
     } else {
-        LOG_ERROR("CONFIG", "Échec de la sauvegarde configuration");
-        prefs.end();
-        return false;
+        prefs.putString("lastSave", "unknown");
     }
+    
+    prefs.putUChar("logLevel", config.logLevel);
+    prefs.end();
+    return true;
 }
 
-bool ConfigManager::saveConfigIfChanged(SystemConfig& config) {
-    uint32_t currentHash = calculateConfigHash(config);
-    if (currentHash == config.configHash) {
-        return true;
+uint32_t ConfigManager::calculateConfigHash(const SystemConfig& config) {
+    uint32_t hash = 0;
+    // Hash relevant members individually
+    hash = hash * 31 + (uint32_t)config.usePWM;
+    hash = hash * 31 + (uint32_t)config.weatherModeEnabled;
+    hash = hash * 31 + (uint32_t)config.cameraEnabled;
+    hash = hash * 31 + (uint32_t)config.useTempCurve;
+    hash = hash * 31 + (uint32_t)config.useLimitTemp;
+    hash = hash * 31 + (uint32_t)(config.hysteresis * 1000); // Convert float to int for hashing
+    hash = hash * 31 + (uint32_t)(config.Kp * 1000);
+    hash = hash * 31 + (uint32_t)(config.Ki * 1000);
+    hash = hash * 31 + (uint32_t)(config.Kd * 1000);
+    hash = hash * 31 + (uint32_t)config.setpoint;
+    hash = hash * 31 + (uint32_t)config.globalMinTempSet;
+    hash = hash * 31 + (uint32_t)config.globalMaxTempSet;
+
+    // Hash tempCurve array
+    for (int i = 0; i < TEMP_CURVE_POINTS; i++) {
+        hash = hash * 31 + (uint32_t)config.tempCurve[i];
     }
-    config.configHash = currentHash;
-    return saveConfig(config);
+
+    hash = hash * 31 + (uint32_t)(config.latitude * 10000);
+    hash = hash * 31 + (uint32_t)(config.longitude * 10000);
+    hash = hash * 31 + (uint32_t)config.DST_offset;
+
+    hash = hash * 31 + (uint32_t)config.ledState;
+    hash = hash * 31 + (uint32_t)config.ledBrightness;
+    hash = hash * 31 + (uint32_t)config.ledRed;
+    hash = hash * 31 + (uint32_t)config.ledGreen;
+    hash = hash * 31 + (uint32_t)config.ledBlue;
+
+    
+    hash = hash * 31 + (uint32_t)config.logLevel;
+
+    // For String members, hash their content
+    for (char c : config.currentProfileName) {
+        hash = hash * 31 + (uint32_t)c;
+    }
+    for (char c : config.cameraResolution) {
+        hash = hash * 31 + (uint32_t)c;
+    }
+    // lastSaveTime is dynamic, so don't include in hash for change detection
+    
+    return hash;
 }
 
 void ConfigManager::requestSave() {
@@ -83,21 +203,23 @@ void ConfigManager::requestSave() {
     savePending = true;
 }
 
+bool ConfigManager::saveConfigIfChanged(SystemConfig& config) {
+    uint32_t currentHash = calculateConfigHash(config);
+    if (currentHash != config.configHash) {
+        LOG_INFO("CONFIG", "Configuration changed (hash %u -> %u). Saving...", config.configHash, currentHash);
+        config.configHash = currentHash; // Update hash before saving
+        return saveConfig(config);
+    } else {
+        LOG_INFO("CONFIG", "Configuration unchanged. No save needed.");
+        return true;
+    }
+}
+
 void ConfigManager::processPendingSave(SystemConfig& config) {
     if (savePending && (millis() - lastSaveRequest >= SAVE_DELAY)) {
         savePending = false;
         saveConfigIfChanged(config);
     }
-}
-
-uint32_t ConfigManager::calculateConfigHash(const SystemConfig& config) {
-    uint32_t hash = 0;
-    const uint8_t* data = (const uint8_t*)&config;
-    size_t dataSize = sizeof(config) - sizeof(config.lastSaveTime) - sizeof(config.configHash);
-    for (size_t i = 0; i < dataSize; i++) {
-        hash = hash * 31 + data[i];
-    }
-    return hash;
 }
 
 bool ConfigManager::createDefaultProfile() {
@@ -132,19 +254,55 @@ bool ConfigManager::createDefaultProfile() {
     doc["ledRed"] = 255;
     doc["ledGreen"] = 255;
     doc["ledBlue"] = 255;
-    doc["seasonalModeEnabled"] = false;
+    
     doc["logLevel"] = 3;
-    JsonArray temps = doc.createNestedArray("tempCurve");
-    for (int i = 0; i < TEMP_CURVE_POINTS; i++) {
-        float temp = 22.2f + (i >= 8 && i <= 20 ? 3.0f : 0.0f);
-        temps.add(temp);
-    }
     serializeJson(doc, generalFile);
     generalFile.close();
     createDefaultSeasonalData("default");
     LOG_INFO("CONFIG", "Profil par défaut créé");
     return true;
 }
+
+bool ConfigManager::saveProfile(const String& profileName, const SystemConfig& config) {
+    if (!ensureProfileDirectory(profileName)) return false;
+    const String generalPath = "/profiles/" + profileName + "/general.json";
+    File file = LittleFS.open(generalPath, "w");
+    if (!file) return false;
+    StaticJsonDocument<2048> doc;
+    doc["name"] = profileName;
+    doc["usePWM"] = config.usePWM;
+    doc["weatherModeEnabled"] = config.weatherModeEnabled;
+    doc["cameraEnabled"] = config.cameraEnabled;
+    doc["cameraResolution"] = config.cameraResolution;
+    doc["useTempCurve"] = config.useTempCurve;
+    doc["useLimitTemp"] = config.useLimitTemp;
+    doc["hysteresis"] = config.hysteresis;
+    doc["Kp"] = config.Kp;
+    doc["Ki"] = config.Ki;
+    doc["Kd"] = config.Kd;
+    doc["setpoint"] = config.getSetpointFloat();
+    doc["latitude"] = config.latitude;
+    doc["longitude"] = config.longitude;
+    doc["DST_offset"] = config.DST_offset;
+    doc["globalMinTempSet"] = config.getMinTempFloat();
+    doc["globalMaxTempSet"] = config.getMaxTempFloat();
+    JsonArray curve = doc.createNestedArray("tempCurve");
+    for (int i = 0; i < TEMP_CURVE_POINTS; i++) {
+        curve.add(config.getTempCurve(i));
+    }
+    doc["ledState"] = config.ledState;
+    doc["ledBrightness"] = config.ledBrightness;
+    doc["ledRed"] = config.ledRed;
+    doc["ledGreen"] = config.ledGreen;
+    doc["ledBlue"] = config.ledBlue;
+    
+    doc["logLevel"] = config.logLevel;
+    serializeJson(doc, file);
+    file.close();
+    return true;
+}
+
+// --- Fonctions manquantes ---
 
 bool ConfigManager::loadProfile(const String& profileName, SystemConfig& config) {
     const String generalPath = "/profiles/" + profileName + "/general.json";
@@ -182,51 +340,9 @@ bool ConfigManager::loadProfile(const String& profileName, SystemConfig& config)
     if (doc.containsKey("ledRed")) config.ledRed = doc["ledRed"];
     if (doc.containsKey("ledGreen")) config.ledGreen = doc["ledGreen"];
     if (doc.containsKey("ledBlue")) config.ledBlue = doc["ledBlue"];
-    if (doc.containsKey("seasonalModeEnabled")) config.seasonalModeEnabled = doc["seasonalModeEnabled"];
+    
     if (doc.containsKey("logLevel")) config.logLevel = doc["logLevel"];
     config.currentProfileName = profileName;
-    return true;
-}
-
-bool ConfigManager::saveProfile(const String& profileName, const SystemConfig& config) {
-    if (!ensureProfileDirectory(profileName)) return false;
-    const String generalPath = "/profiles/" + profileName + "/general.json";
-    File file = LittleFS.open(generalPath, "w");
-    if (!file) return false;
-    StaticJsonDocument<2048> doc;
-    doc["name"] = profileName;
-    doc["usePWM"] = config.usePWM;
-    doc["weatherModeEnabled"] = config.weatherModeEnabled;
-    doc["cameraEnabled"] = config.cameraEnabled;
-    doc["cameraResolution"] = config.cameraResolution;
-    doc["useTempCurve"] = config.useTempCurve;
-    doc["useLimitTemp"] = config.useLimitTemp;
-    doc["hysteresis"] = config.hysteresis;
-    doc["Kp"] = config.Kp;
-    doc["Ki"] = config.Ki;
-    doc["Kd"] = config.Kd;
-    doc["setpoint"] = config.getSetpointFloat();
-    doc["latitude"] = config.latitude;
-    doc["longitude"] = config.longitude;
-    doc["DST_offset"] = config.DST_offset;
-    doc["globalMinTempSet"] = config.getMinTempFloat();
-    doc["globalMaxTempSet"] = config.getMaxTempFloat();
-    JsonArray curve = doc.createNestedArray("tempCurve");
-    for (int i = 0; i < TEMP_CURVE_POINTS; i++) {
-        curve.add(config.getTempCurve(i));
-    }
-    doc["ledState"] = config.ledState;
-    doc["ledBrightness"] = config.ledBrightness;
-    doc["ledRed"] = config.ledRed;
-    doc["ledGreen"] = config.ledGreen;
-    doc["ledBlue"] = config.ledBlue;
-    doc["seasonalModeEnabled"] = config.seasonalModeEnabled;
-    doc["logLevel"] = config.logLevel;
-    if (serializeJson(doc, file) == 0) {
-        file.close();
-        return false;
-    }
-    file.close();
     return true;
 }
 
@@ -240,14 +356,23 @@ bool ConfigManager::profileExists(const String& profileName) {
     return LittleFS.exists(path);
 }
 
-bool ConfigManager::ensureProfileDirectory(const String& profileName) {
-    const String profileDir = "/profiles/" + profileName;
-    if (!LittleFS.exists(profileDir)) {
-        if (!LittleFS.mkdir(profileDir)) {
-            return false;
+std::vector<String> ConfigManager::listProfiles() {
+    std::vector<String> profiles;
+    File root = LittleFS.open("/profiles");
+    if (!root || !root.isDirectory()) return profiles;
+    File file = root.openNextFile();
+    while (file) {
+        if (file.isDirectory()) {
+            String profileName = file.name();
+            profileName.replace("/profiles/", "");
+            if (profileExists(profileName)) {
+                profiles.push_back(profileName);
+            }
         }
+        file = root.openNextFile();
     }
-    return true;
+    root.close();
+    return profiles;
 }
 
 bool ConfigManager::loadSeasonalData(const String& profileName, int dayIndex, float* temperatures) {
@@ -306,6 +431,16 @@ bool ConfigManager::createDefaultSeasonalData(const String& profileName) {
     return true;
 }
 
+bool ConfigManager::ensureProfileDirectory(const String& profileName) {
+    const String profileDir = "/profiles/" + profileName;
+    if (!LittleFS.exists(profileDir)) {
+        if (!LittleFS.mkdir(profileDir)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void ConfigManager::generateDefaultDayTemperatures(int dayIndex, float* dayTemps) {
     float seasonalBase = 22.0f + 6.0f * sin((dayIndex / 366.0f) * 2.0f * PI - PI/2);
     for (int hour = 0; hour < 24; hour++) {
@@ -315,23 +450,4 @@ void ConfigManager::generateDefaultDayTemperatures(int dayIndex, float* dayTemps
         if (dayTemps[hour] < 15.0f) dayTemps[hour] = 15.0f;
         if (dayTemps[hour] > 35.0f) dayTemps[hour] = 35.0f;
     }
-}
-
-std::vector<String> ConfigManager::listProfiles() {
-    std::vector<String> profiles;
-    File root = LittleFS.open("/profiles");
-    if (!root || !root.isDirectory()) return profiles;
-    File file = root.openNextFile();
-    while (file) {
-        if (file.isDirectory()) {
-            String profileName = file.name();
-            profileName.replace("/profiles/", "");
-            if (profileExists(profileName)) {
-                profiles.push_back(profileName);
-            }
-        }
-        file = root.openNextFile();
-    }
-    root.close();
-    return profiles;
 }

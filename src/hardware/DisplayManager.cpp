@@ -151,7 +151,6 @@ void DisplayManager::showModesPage(const SystemConfig& config) {
     
     display->printf("PWM:     %s\n", config.usePWM ? "ON" : "OFF");
     display->printf("Meteo:   %s\n", config.weatherModeEnabled ? "ON" : "OFF");
-    display->printf("Saison:  %s\n", config.seasonalModeEnabled ? "ON" : "OFF");
     display->printf("Camera:  %s\n", config.cameraEnabled ? "ON" : "OFF");
     display->printf("LogLevel: %s", logLevelToString((LogLevel)config.logLevel));
 }

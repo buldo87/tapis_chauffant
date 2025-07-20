@@ -22,12 +22,18 @@ private:
     static void handleGetDayData(AsyncWebServerRequest *request);
     static void handleSaveDayData(AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total);
     static void handleGetYearlyTemperatures(AsyncWebServerRequest *request);
+    static void handleExtendMonthData(AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total);
+    static void handleSmoothMonthData(AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total);
+    static void handleApplyYearlyCurve(AsyncWebServerRequest *request, uint8_t* data, size_t len, size_t index, size_t total);
     static void handleStatus(AsyncWebServerRequest *request);
     static void handleHistory(AsyncWebServerRequest *request);
     static void handleSafetyStatus(AsyncWebServerRequest *request);
     static void handleCapture(AsyncWebServerRequest *request);
     static void handleMJPEG(AsyncWebServerRequest *request);
     static void handleMJPEGInfo(AsyncWebServerRequest *request);
+    static void handleDownloadProfile(AsyncWebServerRequest *request);
+    static void handleDownloadSeasonalData(AsyncWebServerRequest *request);
+    static void handleSetCamera(AsyncWebServerRequest *request);
 
     // Validation
     static bool validateJsonConfig(const DynamicJsonDocument& doc);

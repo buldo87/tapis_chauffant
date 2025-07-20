@@ -40,7 +40,7 @@
         <!-- Dashboard Tab -->
         <div id="dashboardContent" class="tab-content">
             <!-- Status Cards -->
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
                 <div class="metric-card fade-in">
                     <div class="metric-label">Température</div>
                     <div id="temperature" class="metric-value">--°C</div>
@@ -63,34 +63,7 @@
                     </div>
                 </div>
                 
-                <div class="metric-card fade-in">
-                    <div class="metric-label">🔥État Chauffage</div>
-                    <div id="heaterState" class="metric-value">--</div>
-
-                    <div class="text-sm text-gray-400">
-                        Mode : <span id="currentMode">--</span>
-                    </div>
-
-                    <div class="text-sm text-gray-400" id="modeDetails">
-                        <!-- PID ou hystérésis -->
-                    </div>
-
-                    <div class="text-sm text-gray-400">
-                        Consigne : <span id="consigneTemp">--°C</span>
-                    </div>
-                </div>
                 
-                <div class="metric-card fade-in">
-                    <div class="metric-label">Système</div>
-                    <div class="metric-value text-lg">
-                        <span class="status-indicator status-online"></span>WiFi
-                    </div>
-                    <div class="metric-value text-lg">
-                        <span id="led-dot" class="status-indicator" style="background-color: #000;"></span>
-                        <span> LED</span>
-                    </div>
-                    <div class="text-sm text-gray-400  mt-2" id="currentTime">--:--</div>
-                </div>
             </div>
 
             <!-- Charts Section -->
@@ -131,8 +104,10 @@
                         style="width: 100%; max-width: 640px;" 
                         alt="Stream caméra">
                 </div>
-                
+      
+            
                 <!-- Message d'erreur -->
+               
                 <div id="cameraError" style="display: none;" class="mt-4 p-3 bg-red-900 text-red-300 rounded-lg text-center">
                     ❌ Erreur de connexion au stream caméra. 
                     <button id="retryCameraBtn" class="ml-2 bg-red-700 px-3 py-1 rounded hover:bg-red-600">
@@ -176,8 +151,13 @@
                                     Jour Suivant<i class="fas fa-chevron-right ml-2"></i>
                                 </button>
                             </div>
+                            <button id="saveSelectedDayBtn" class="btn-success" style="display: none;">
+                                <i class="fas fa-save mr-2"></i>Sauvegarder le jour
+                            </button>
                         </div>
                     </div>
+                    
+                    
                     
                     <div class="chart-container">
                         <canvas id="configTempChart"></canvas>
@@ -203,6 +183,10 @@
                         
                         <div id="heatmapCanvas" class="w-full bg-gray-900 rounded-lg p-4" style="min-height: 200px;">
                             <!-- La heatmap sera générée ici par JavaScript -->
+                            <div id="heatmapLoadingSpinner" class="loading-spinner" style="display: none;">
+                                <i class="fas fa-spinner fa-spin fa-3x"></i>
+                                <p class="text-gray-400 mt-2">Chargement du calendrier...</p>
+                            </div>
                         </div>
                         
                         <div class="mt-4 text-center">
@@ -212,18 +196,28 @@
                         </div>
                     </div>
 
-                    <!-- Outils de Modification - Affichés seulement si mode saisonnier activé -->
-                    <div id="seasonalTools" class="mt-8" style="display: none;">
+                    <!-- Outils de Modification -->
+                    <div id="seasonalTools" class="mt-8">
                         <h4 class="text-lg font-medium mb-4">🛠️ Outils de Modification</h4>
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <button id="capTempsBtn" class="btn-secondary text-sm">
                                 🌡️ Plafonner les températures d'un mois
                             </button>
-                            <button id="smoothMonthBtn" class="btn-secondary text-sm">
-                                🌊 Lisser les courbes d'un mois
+                            <button id="smoothDayBtn" class="btn-secondary text-sm">
+                                🌊 Lisser la courbe
                             </button>
                             <button id="copyDayBtn" class="btn-secondary text-sm">
                                 📋 Copier un jour vers un mois entier
+                            </button>
+                        </div>
+                        <div class="mt-4">
+                            <button id="applyYearlyBtn" class="btn-primary w-full">
+                                🌍 Appliquer à toute l'année
+                            </button>
+                        </div>
+                        <div class="mt-4">
+                            <button id="saveYearlyTemperaturesBtn" class="btn-primary w-full">
+                                💾 Sauvegarder Année
                             </button>
                         </div>
                         
@@ -237,35 +231,7 @@
                     <!-- Outils de Modification repositionnés APRÈS la Vue Annuelle -->
                     <div class="controls mt-6">
                         <div class="control-group">
-                            <h3>🎛️ Profils Prédéfinis</h3>
-                            <div class="px-6 py-3 rounded-md duration-300">
-                                <button class="btn-secondary" onclick="smoothCurve()">🌊 Lisser la Courbe</button>
-                                                                
-                                <div class="preset-section">
-                                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-4 text-sm">
-                                    <button class="preset-btn" onclick="applyPreset('mer')">
-                                        🐚 <span class="ml-1">Bord de mer (24–29 °C)</span>
-                                    </button>
-                                    <button class="preset-btn" onclick="applyPreset('foret')">
-                                        🍃 <span class="ml-1">Forêt (23–28 °C)</span>
-                                    </button>
-                                    <button class="preset-btn" onclick="applyPreset('tropical')">
-                                        🌴 <span class="ml-1">Tropical (28–32 °C)</span>
-                                    </button>
-                                    <button class="preset-btn" onclick="applyPreset('desert')">
-                                        ☀️ <span class="ml-1">Désert (23–32 °C)</span>
-                                    </button>
-                                    <button class="preset-btn" onclick="applyPreset('constant')">
-                                        ⚖️ <span class="ml-1">Constant (25 °C)</span>
-                                    </button>
-                                    <button id="copieSettings" class="preset-btn" onclick="applyPreset('copie')" style="display: none;">
-                                        🌍 <span class="ml-1">Copie météo locales</span>
-                                    </button>
-                                    <button class="preset-btn" onclick="resetToDefault()">
-                                        ♻️ <span class="ml-1">Réinitialiser</span>
-                                    </button>
-                                    </div>
-                                </div>
+                            
 
                                 <!-- === GESTION DES PROFILS SIMPLIFIÉE === -->
                                 <div class="card mt-8 p-4 rounded-md shadow-md bg-gray-800 text-gray-100">
@@ -305,29 +271,9 @@
                         Copie des températures d'un lieu
                     </h3>
                     
-                    <div class="mb-6">
-                        <label class="flex items-center justify-between">
-                            <span>Mode Copie</span>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="weatherMode">
-                                <span class="slider"></span>
-                            </label>
-                        </label>
-                    </div>
+                    
 
-                    <!-- Switch pour le suivi saisonnier -->
-                    <div class="mb-6">
-                        <label class="flex items-center justify-between">
-                            <span>Activer le Suivi Saisonnier</span>
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="seasonalMode">
-                                <span class="slider"></span>
-                            </label>
-                        </label>
-                        <div class="text-sm text-gray-400 mt-2">
-                            Quand activé, le système utilise automatiquement les données climatiques historiques au lieu de la courbe manuelle
-                        </div>
-                    </div>
+                    
 
                     <div id="weatherSettings" style="display: none;">
                         <h3>🌍 Configuration du lieu</h3>
@@ -380,7 +326,7 @@
                 </div>
             </div>
 
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <!-- Heating Control -->
                 <div class="card">
                     <h3 class="text-xl font-semibold mb-6 flex items-center">
@@ -494,36 +440,36 @@
                         </label>
                     </div>
                 </div>
-            </div>
 
-            <!-- LED Control - Section séparée -->
-            <div class="card">
-                <h3 class="text-xl font-semibold mb-6 flex items-center">
-                    <i class="fas fa-lightbulb text-yellow-400 mr-2"></i>
-                    Contrôle LED
-                </h3>
+                <!-- LED Control -->
+                <div class="card">
+                    <h3 class="text-xl font-semibold mb-6 flex items-center">
+                        <i class="fas fa-lightbulb text-yellow-400 mr-2"></i>
+                        Contrôle LED
+                    </h3>
 
-                <div class="mb-6">
-                    <label class="flex items-center justify-between">
-                        <span>Allumer / Éteindre</span>
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="led-toggle">
-                            <span class="slider"></span>
+                    <div class="mb-6">
+                        <label class="flex items-center justify-between">
+                            <span>Allumer / Éteindre</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="led-toggle">
+                                <span class="slider"></span>
+                            </label>
                         </label>
-                    </label>
-                </div>
-
-                <div class="mb-4">
-                    <label class="block text-sm font-medium mb-2">Intensité</label>
-                    <div class="flex items-center">
-                        <input type="range" id="brightness-slider" min="0" max="255" value="255" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
-                        <span id="brightness-value" class="ml-4 text-lg font-semibold">255</span>
                     </div>
-                </div>
 
-                <div class="mb-4">
-                    <label class="block text-sm font-medium mb-2">Couleur</label>
-                    <input type="color" id="color-picker" value="#ffffff" class="input-field w-full h-10 p-1">
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium mb-2">Intensité</label>
+                        <div class="flex items-center">
+                            <input type="range" id="brightness-slider" min="0" max="255" value="255" class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                            <span id="brightness-value" class="ml-4 text-lg font-semibold">255</span>
+                        </div>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium mb-2">Couleur</label>
+                        <input type="color" id="color-picker" value="#ffffff" class="input-field w-full h-10 p-1">
+                    </div>
                 </div>
             </div>
 
@@ -534,7 +480,7 @@
                     Sauvegarde
                 </h3>
                 
-                <button id="applyBtn" class="btn-primary w-full" onclick="applyAllSettings()">
+                <button id="applyBtn" class="btn-primary w-full">
                     <i class="fas fa-download mr-2"></i>
                     Sauvegarder Configuration
                 </button>
@@ -545,7 +491,7 @@
     <!-- Scripts -->
 	<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/spectrum/1.8.0/spectrum.min.js"></script>  
-    <script src="/js/main.js" type="module"></script>
+    <script src="/js/main.js?v=1.1" type="module"></script>
 
 </body>
 </html>

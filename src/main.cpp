@@ -87,12 +87,14 @@ bool updateDisplaySafe();
 void setup() {
     Serial.begin(115200);
     delay(2000);
+    delay(10000); // Pause de 10 secondes pour les logs
     
     LOG_INFO("MAIN", "==================================================");
     LOG_INFO("MAIN", "🚀 CONTRÔLEUR VIVARIUM v2.0 REFACTORISÉ");
     LOG_INFO("MAIN", "==================================================");
     
     initFileSystem();
+    LOG_INFO("MAIN", "Current profile name: %s", config.currentProfileName.c_str());
     initHardware();
     initNetworking();
     initSensors();
@@ -285,14 +287,6 @@ int16_t getCurrentTargetTemperature() {
     if (!getLocalTime(&timeinfo)) {
         return config.setpoint;
     }
-    if (config.seasonalModeEnabled) {
-        int dayOfYear = timeinfo.tm_yday;
-        int hour = timeinfo.tm_hour;
-        float seasonalTempFloat[24];
-        if (ConfigManager::loadSeasonalData(config.currentProfileName, dayOfYear, seasonalTempFloat)) {
-            return (int16_t)(seasonalTempFloat[hour] * 10);
-        }
-    }
     return config.getTempCurve(timeinfo.tm_hour);
 }
 
@@ -300,7 +294,7 @@ void controlHeater(int16_t currentTemperature) {
     if (SafetySystem::isEmergencyShutdown() || SafetySystem::getCurrentLevel() >= SAFETY_CRITICAL) {
         output = 0;
         analogWrite(HEATER_PIN, 0);
-        LOG_WARN("HEATER", "Chauffage bloqué par le système de sécurité (Niveau: %d)", SafetySystem::getCurrentLevel());
+        //LOG_WARN("HEATER", "Chauffage bloqué par le système de sécurité (Niveau: %d)", SafetySystem::getCurrentLevel());
         return;
     }
     
@@ -387,7 +381,6 @@ void renderOLEDPage(int page) {
             display.drawLine(0, 10, display.width(), 10, SSD1306_WHITE);
             display.printf("PWM: %s\n", config.usePWM ? "ON" : "OFF");
             display.printf("Meteo: %s\n", config.weatherModeEnabled ? "ON" : "OFF");
-            display.printf("Saison: %s\n", config.seasonalModeEnabled ? "ON" : "OFF");
             display.printf("Camera: %s", config.cameraEnabled ? "ON" : "OFF");
             break;
     }
