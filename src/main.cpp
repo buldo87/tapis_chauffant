@@ -9,6 +9,7 @@
 #include "utils/Logger.h"
 #include "web/AppWebServer.h"
 #include "wifi_credentials.h"
+#include "hardware/CameraManager.h" // Ajout de l'en-tête
 
 // === INCLUDES MATÉRIELS ===
 #include <WiFi.h>
@@ -149,6 +150,9 @@ void initHardware() {
     myPID.SetMode(AUTOMATIC);
     myPID.SetOutputLimits(0, 255);
     myPID.SetTunings(config.Kp, config.Ki, config.Kd);
+    if (config.cameraEnabled) {
+        CameraManager::initialize(config);
+    }
     LOG_INFO("HARDWARE", "Initialisation réussie.");
 }
 

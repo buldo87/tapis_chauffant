@@ -4,6 +4,7 @@
 #include "../sensors/SensorManager.h"
 #include "../sensors/SafetySystem.h"
 #include "../utils/Logger.h"
+#include "../hardware/CameraManager.h" // Ajout de l'en-tête
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 
@@ -85,9 +86,9 @@ void AppWebServerManager::setupRoutes(AsyncWebServer& server) {
     server.on("/api/history", HTTP_GET, handleHistory);
     server.on("/api/safety", HTTP_GET, handleSafetyStatus);
 
-    server.on("/capture", HTTP_GET, handleCapture);
-    server.on("/mjpeg", HTTP_GET, handleMJPEG);
-    server.on("/mjpeg/info", HTTP_GET, handleMJPEGInfo);
+    server.on("/capture", HTTP_GET, CameraManager::handleCapture);
+    server.on("/mjpeg", HTTP_GET, CameraManager::handleStream);
+    
     
     server.on("/download/profile", HTTP_GET, handleDownloadProfile);
     server.on("/download/seasonal", HTTP_GET, handleDownloadSeasonalData);
@@ -438,17 +439,7 @@ void AppWebServerManager::handleSafetyStatus(AsyncWebServerRequest *request) {
     request->send(200, "application/json", response);
 }
 
-void AppWebServerManager::handleCapture(AsyncWebServerRequest *request) {
-    request->send(501, "text/plain", "Not Implemented");
-}
 
-void AppWebServerManager::handleMJPEG(AsyncWebServerRequest *request) {
-    request->send(501, "text/plain", "Not Implemented");
-}
-
-void AppWebServerManager::handleMJPEGInfo(AsyncWebServerRequest *request) {
-    request->send(501, "text/plain", "Not Implemented");
-}
 
 void AppWebServerManager::handleDownloadProfile(AsyncWebServerRequest *request) {
     if (!request->hasParam("name")) {

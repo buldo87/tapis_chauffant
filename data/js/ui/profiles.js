@@ -75,6 +75,7 @@ async function loadProfile(name) {
         updateHeatmap(yearlyData);
 
         alert(`Profil '${name}' chargé et activé.`);
+        document.getElementById('activeProfileName').textContent = name;
 
     } catch (error) {
         console.error(`Failed to load profile ${name}:`, error);

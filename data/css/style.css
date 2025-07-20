@@ -546,3 +546,13 @@
 .loading-spinner i {
     margin-bottom: 10px;
 }
+
+.hidden {
+    display: none;
+}
+/* 
+"Tout conteneur d'onglet qui a la classe hidden doit être masqué, et cette règle a la priorité sur TOUT autre style."
+.tab-content.hidden {                                                                   
+    display: none !important;                                                           
+}  
+*/

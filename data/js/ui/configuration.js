@@ -1,4 +1,5 @@
 import { state, setConfig } from '../state.js';
+import { toggleMap } from './map.js';
 import { api } from '../api.js';
 
 let chart;
@@ -30,6 +31,8 @@ function gatherConfigFromUI() {
     } catch (e) {
         console.warn("Could not get color from spectrum picker.", e);
     }
+
+    newConfig.weatherMode = document.getElementById('weatherMode').checked;
 
     return newConfig;
 }
@@ -125,6 +128,9 @@ function updateVisibility() {
     document.getElementById("pwmSettings").style.display = document.getElementById("usePWM").checked ? "block" : "none";
     document.getElementById("hysteresisSettings").style.display = document.getElementById("usePWM").checked ? "none" : "block";
     document.getElementById("limitTempSettings").style.display = document.getElementById("useLimitTemp").checked ? "block" : "none";
+
+    const weatherModeChecked = document.getElementById("weatherMode").checked;
+    document.getElementById("weatherSettings").style.display = weatherModeChecked ? "block" : "none";
 }
 
 export function getTempCurve() {
@@ -138,11 +144,13 @@ export function initConfiguration(config, onSave) {
     document.getElementById("usePWM").checked = config.usePWM;
     document.getElementById("useLimitTemp").checked = config.useLimitTemp;
     document.getElementById("showCamera").checked = config.cameraEnabled;
+    document.getElementById("weatherMode").checked = config.weatherMode;
 
     updateVisibility();
 
     document.getElementById("usePWM").addEventListener('change', updateVisibility);
     document.getElementById("useLimitTemp").addEventListener('change', updateVisibility);
+    document.getElementById("weatherMode").addEventListener('change', updateVisibility);
 
     document.getElementById('applyBtn').addEventListener('click', async () => {
         const newConfig = gatherConfigFromUI();
@@ -151,7 +159,7 @@ export function initConfiguration(config, onSave) {
             alert('Configuration sauvegardée avec succès !');
         } catch (error) {
             console.error("Erreur lors de la sauvegarde:", error);
-            alert('Erreur lors de la sauvegarde de la configuration.');
+            alert(`Erreur lors de la sauvegarde de la configuration: ${error.message || error}`);
         }
     });
 }

@@ -40,7 +40,7 @@
         <!-- Dashboard Tab -->
         <div id="dashboardContent" class="tab-content">
             <!-- Status Cards -->
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
                 <div class="metric-card fade-in">
                     <div class="metric-label">Température</div>
                     <div id="temperature" class="metric-value">--°C</div>
@@ -63,7 +63,34 @@
                     </div>
                 </div>
                 
+                <div class="metric-card fade-in">
+                    <div class="metric-label">🔥État Chauffage</div>
+                    <div id="heaterState" class="metric-value">--</div>
+
+                    <div class="text-sm text-gray-400">
+                        Mode : <span id="currentMode">--</span>
+                    </div>
+
+                    <div class="text-sm text-gray-400" id="modeDetails">
+                        <!-- PID ou hystérésis -->
+                    </div>
+
+                    <div class="text-sm text-gray-400">
+                        Consigne : <span id="consigneTemp">--°C</span>
+                    </div>
+                </div>
                 
+                <div class="metric-card fade-in">
+                    <div class="metric-label">Système</div>
+                    <div class="metric-value text-lg">
+                        <span class="status-indicator status-online"></span>WiFi
+                    </div>
+                    <div class="metric-value text-lg">
+                        <span id="led-dot" class="status-indicator" style="background-color: #000;"></span>
+                        <span> LED</span>
+                    </div>
+                    <div class="text-sm text-gray-400  mt-2" id="currentTime">--:--</div>
+                </div>
             </div>
 
             <!-- Charts Section -->
@@ -104,10 +131,8 @@
                         style="width: 100%; max-width: 640px;" 
                         alt="Stream caméra">
                 </div>
-      
-            
+                
                 <!-- Message d'erreur -->
-               
                 <div id="cameraError" style="display: none;" class="mt-4 p-3 bg-red-900 text-red-300 rounded-lg text-center">
                     ❌ Erreur de connexion au stream caméra. 
                     <button id="retryCameraBtn" class="ml-2 bg-red-700 px-3 py-1 rounded hover:bg-red-600">
@@ -151,13 +176,8 @@
                                     Jour Suivant<i class="fas fa-chevron-right ml-2"></i>
                                 </button>
                             </div>
-                            <button id="saveSelectedDayBtn" class="btn-success" style="display: none;">
-                                <i class="fas fa-save mr-2"></i>Sauvegarder le jour
-                            </button>
                         </div>
                     </div>
-                    
-                    
                     
                     <div class="chart-container">
                         <canvas id="configTempChart"></canvas>
@@ -183,10 +203,6 @@
                         
                         <div id="heatmapCanvas" class="w-full bg-gray-900 rounded-lg p-4" style="min-height: 200px;">
                             <!-- La heatmap sera générée ici par JavaScript -->
-                            <div id="heatmapLoadingSpinner" class="loading-spinner" style="display: none;">
-                                <i class="fas fa-spinner fa-spin fa-3x"></i>
-                                <p class="text-gray-400 mt-2">Chargement du calendrier...</p>
-                            </div>
                         </div>
                         
                         <div class="mt-4 text-center">
@@ -196,8 +212,8 @@
                         </div>
                     </div>
 
-                    <!-- Outils de Modification -->
-                    <div id="seasonalTools" class="mt-8">
+                    <!-- Outils de Modification - Affichés seulement si mode saisonnier activé -->
+                    <div id="seasonalTools" class="mt-8" style="display: none;">
                         <h4 class="text-lg font-medium mb-4">🛠️ Outils de Modification</h4>
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <button id="capTempsBtn" class="btn-secondary text-sm">
@@ -215,12 +231,6 @@
                                 🌍 Appliquer à toute l'année
                             </button>
                         </div>
-                        <div class="mt-4">
-                            <button id="saveYearlyTemperaturesBtn" class="btn-primary w-full">
-                                💾 Sauvegarder Année
-                            </button>
-                        </div>
-                        
                         <div class="mt-4 p-3 bg-gray-800 rounded-lg">
                             <div class="text-sm text-gray-400">
                                 💡 <strong>Astuce:</strong> Cliquez sur un jour dans le calendrier ci-dessus pour l'éditer individuellement
@@ -228,38 +238,30 @@
                         </div>
                     </div>
 
-                    <!-- Outils de Modification repositionnés APRÈS la Vue Annuelle -->
-                    <div class="controls mt-6">
-                        <div class="control-group">
-                            
+                    <!-- === GESTION DES PROFILS SIMPLIFIÉE === -->
+                    <div class="card mt-8 p-4 rounded-md shadow-md bg-gray-800 text-gray-100">
+                        <h3 class="text-xl font-semibold mb-4">📁 Gestion des Profils</h3>
+                        
+                        <!-- Boutons principaux -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                            <button class="btn-success" onclick="saveProfile()">
+                                💾 Sauvegarder Profil
+                            </button>
+                            <button class="btn-warning" onclick="refreshProfileList()">
+                                🔄 Actualiser la liste
+                            </button>
+                        </div>
+                        
+                        <!-- Liste des profils -->
+                        <ul id="profileList" class="space-y-2 text-sm bg-gray-900 p-3 rounded border border-gray-700 max-h-60 overflow-y-auto">
+                            <li>Chargement...</li>
+                        </ul>
 
-                                <!-- === GESTION DES PROFILS SIMPLIFIÉE === -->
-                                <div class="card mt-8 p-4 rounded-md shadow-md bg-gray-800 text-gray-100">
-                                    <h3 class="text-xl font-semibold mb-4">📁 Gestion des Profils</h3>
-                                    
-                                    <!-- Boutons principaux -->
-                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                                        <button class="btn-success" onclick="saveProfile()">
-                                            💾 Sauvegarder Profil
-                                        </button>
-                                        <button class="btn-warning" onclick="refreshProfileList()">
-                                            🔄 Actualiser la liste
-                                        </button>
-                                    </div>
-                                    
-                                    <!-- Liste des profils -->
-                                    <ul id="profileList" class="space-y-2 text-sm bg-gray-900 p-3 rounded border border-gray-700 max-h-60 overflow-y-auto">
-                                        <li>Chargement...</li>
-                                    </ul>
-
-                                    <!-- Importation -->
-                                    <div class="mt-4">
-                                        <label for="profileUpload" class="block text-sm font-medium text-gray-300 mb-1">📤 Importer un profil (.json)</label>
-                                        <input type="file" id="profileUpload" accept=".json"
-                                        class="block w-full text-sm text-gray-200 bg-gray-700 border border-gray-600 rounded px-2 py-1 focus:outline-none focus:ring focus:border-blue-400" />
-                                    </div>
-                                </div>
-                            </div>
+                        <!-- Importation -->
+                        <div class="mt-4">
+                            <label for="profileUpload" class="block text-sm font-medium text-gray-300 mb-1">📤 Importer un profil (.json)</label>
+                            <input type="file" id="profileUpload" accept=".json"
+                            class="block w-full text-sm text-gray-200 bg-gray-700 border border-gray-600 rounded px-2 py-1 focus:outline-none focus:ring focus:border-blue-400" />
                         </div>
                     </div>
                 </div>
@@ -271,7 +273,15 @@
                         Copie des températures d'un lieu
                     </h3>
                     
-                    
+                    <div class="mb-6">
+                        <label class="flex items-center justify-between">
+                            <span>Mode Copie</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="weatherMode">
+                                <span class="slider"></span>
+                            </label>
+                        </label>
+                    </div>
 
                     
 
@@ -288,19 +298,15 @@
                         
                         <!-- Boutons de géolocalisation -->
                         <div class="map-controls">
-                            <button type="button" onclick="getCurrentLocation()" class="btn-secondary">
-                                📍 Ma Position
-                            </button>
-                            <button type="button" onclick="searchLocation()" class="btn-secondary">
-                                🔍 Rechercher
-                            </button>
-                            <button type="button" onclick="toggleMap()" class="btn-secondary" id="mapToggleBtn">
+                            
+                            
+                            <button type="button" class="btn-secondary" id="mapToggleBtn">
                                 🗺️ Ouvrir la Carte
                             </button>
                         </div>
                             
                         <!-- Conteneur de la carte -->
-                        <div id="mapContainer" style="display: none; margin-top: 15px;">
+                        <div id="mapContainer" style="margin-top: 15px;">
                             <div id="map" style="height: 400px; width: 100%; border-radius: 8px; border: 2px solid #311616;"></div>
                             <p style="color: #ccc; font-size: 12px; margin-top: 5px;">
                                 🖱️ Cliquez sur la carte pour sélectionner une position
@@ -440,7 +446,7 @@
                         </label>
                     </div>
                 </div>
-
+                
                 <!-- LED Control -->
                 <div class="card">
                     <h3 class="text-xl font-semibold mb-6 flex items-center">
@@ -480,7 +486,7 @@
                     Sauvegarde
                 </h3>
                 
-                <button id="applyBtn" class="btn-primary w-full">
+                <button id="applyBtn" class="btn-primary w-full" onclick="applyAllSettings()">
                     <i class="fas fa-download mr-2"></i>
                     Sauvegarder Configuration
                 </button>
@@ -491,7 +497,7 @@
     <!-- Scripts -->
 	<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/spectrum/1.8.0/spectrum.min.js"></script>  
-    <script src="/js/main.js?v=1.1" type="module"></script>
+    <script src="/js/main.js" type="module"></script>
 
 </body>
 </html>

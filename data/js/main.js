@@ -56,10 +56,30 @@ document.addEventListener('DOMContentLoaded', async () => {
         initSeasonal(state.config);
         initLedControls(state.config);
 
-        document.getElementById('mapToggleBtn').addEventListener('click', () => {
-            const mapContainer = document.getElementById('mapContainer');
+        const mapContainer = document.getElementById('mapContainer');
+        const mapToggleBtn = document.getElementById('mapToggleBtn');
+
+        // Initialisation de l'état de la carte et du bouton au chargement
+        if (initialConfig.weatherMode) {
+            mapContainer.style.display = 'block';
+            mapToggleBtn.innerHTML = '<i class="fas fa-map-marked-alt mr-2"></i>Fermer la Carte';
+            toggleMap(true); // Initialise la carte si le mode météo est activé
+        } else {
+            mapContainer.style.display = 'none';
+            mapToggleBtn.innerHTML = '<i class="fas fa-map-marked-alt mr-2"></i>Ouvrir la Carte';
+        }
+
+        mapToggleBtn.addEventListener('click', () => {
             const isVisible = mapContainer.style.display === 'block';
-            toggleMap(!isVisible);
+
+            if (isVisible) {
+                mapContainer.style.display = 'none';
+                mapToggleBtn.innerHTML = '<i class="fas fa-map-marked-alt mr-2"></i>Ouvrir la Carte';
+            } else {
+                mapContainer.style.display = 'block';
+                mapToggleBtn.innerHTML = '<i class="fas fa-map-marked-alt mr-2"></i>Fermer la Carte';
+                toggleMap(true); // Initialize/invalidate map when shown
+            }
         });
 
         // 3. Démarrer les mises à jour périodiques

@@ -33,16 +33,12 @@ function updateCoordinates(lat, lon) {
 }
 
 export function toggleMap(show) {
-    const mapContainer = document.getElementById('mapContainer');
     if (show) {
-        mapContainer.style.display = 'block';
         if (!map) {
             const lat = parseFloat(document.getElementById('latInput').value) || 48.8566;
             const lon = parseFloat(document.getElementById('lonInput').value) || 2.3522;
             initMap(lat, lon);
         }
         setTimeout(() => map.invalidateSize(), 100); // Fix map rendering issues
-    } else {
-        mapContainer.style.display = 'none';
     }
 }
