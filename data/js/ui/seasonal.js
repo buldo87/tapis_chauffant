@@ -18,6 +18,7 @@ function getYearlyTemperatureRange() {
     if (!state.seasonalData || state.seasonalData.length === 0) {
         return { min: 10, max: 35 };
     }
+    // Iterate over the already divided by 10 values in state.seasonalData
     for (let day = 0; day < state.seasonalData.length; day++) {
         for (let h = 0; h < 24; h++) {
             const t = state.seasonalData[day][h];

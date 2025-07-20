@@ -43,9 +43,9 @@ function initChart() {
     const ctx = canvas.getContext('2d');
 
     const extendedTemperatureData = [
-        state.config.tempCurve[state.config.tempCurve.length - 1] / 10.0,
-        ...state.config.tempCurve.map(t => t / 10.0),
-        state.config.tempCurve[0] / 10.0
+        state.config.tempCurve[state.config.tempCurve.length - 1],
+        ...state.config.tempCurve,
+        state.config.tempCurve[0]
     ];
 
     const labels = ['23h', '0h', '1h', '2h', '3h', '4h', '5h', '6h', '7h', '8h', '9h', '10h', '11h',
@@ -81,7 +81,12 @@ function initChart() {
             scales: { 
                 y: { 
                     min: state.config.globalMinTempSet / 10.0,
-                    max: state.config.globalMaxTempSet / 10.0 
+                    max: state.config.globalMaxTempSet / 10.0,
+                    ticks: {
+                        callback: function(value, index, values) {
+                            return value.toFixed(1) + '°C';
+                        }
+                    }
                 }
             }
         }
@@ -130,8 +135,14 @@ function updateTemperature(hour, temp) {
 
 function updateChartScales() {
     if (!chart) return;
-    chart.options.scales.y.min = parseFloat(document.getElementById('minTempSet').value);
-    chart.options.scales.y.max = parseFloat(document.getElementById('maxTempSet').value);
+    const minVal = parseFloat(document.getElementById('minTempSet').value);
+    const maxVal = parseFloat(document.getElementById('maxTempSet').value);
+
+    state.config.globalMinTempSet = minVal * 10; // Update state with value * 10
+    state.config.globalMaxTempSet = maxVal * 10; // Update state with value * 10
+
+    chart.options.scales.y.min = minVal;
+    chart.options.scales.y.max = maxVal;
     chart.update();
 }
 
@@ -159,6 +170,10 @@ export function initConfiguration(config, onSave) {
     document.getElementById("showCamera").checked = config.cameraEnabled;
     document.getElementById("weatherMode").checked = config.weatherMode;
 
+    // Initialize min/max temperature input fields
+    document.getElementById('minTempSet').value = (config.globalMinTempSet / 10.0).toFixed(1);
+    document.getElementById('maxTempSet').value = (config.globalMaxTempSet / 10.0).toFixed(1);
+
     updateVisibility();
 
     document.getElementById("usePWM").addEventListener('change', updateVisibility);
@@ -184,9 +199,9 @@ export function updateTempChart(tempData) {
     if (!chart) return;
     state.config.tempCurve = tempData;
     const extendedTemperatureData = [
-        tempData[tempData.length - 1] / 10.0,
-        ...tempData.map(t => t / 10.0),
-        tempData[0] / 10.0
+        tempData[tempData.length - 1] ,
+        ...tempData.map(t => t ),
+        tempData[0] 
     ];
     chart.data.datasets[0].data = extendedTemperatureData;
     chart.update();
